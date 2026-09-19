@@ -17,6 +17,8 @@ from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import google.generativeai as genai
 from groq import Groq
+from flask import Flask
+import threading
 
 # 로깅 설정
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -292,7 +294,7 @@ def generate_chart_image(df: pd.DataFrame, ticker_name: str, style: int, indicat
 
 
 # ==========================================
-# 5. 네이버 증권 기반 전수 종목 자동 판별 시스템 (pykrx 대체)
+# 5. 네이버 증권 기반 전수 종목 자동 판별 및 스케줄러 시스템
 # ==========================================
 class UltimateStockSystem:
     def __init__(self, bot_app=None):
@@ -305,7 +307,6 @@ class UltimateStockSystem:
         self.setup_scheduler()
         
     def load_all_stocks_naver(self):
-        """네이버 증권 크롤링을 통해 코스피(.KS)와 코스닥(.KQ) 전수 종목을 완벽하게 매핑"""
         try:
             for market_type, suffix in [("sise_market_sum.naver?sosok=0", ".KS"), ("sise_market_sum.naver?sosok=1", ".KQ")]:
                 page = 1
@@ -424,7 +425,7 @@ class UltimateStockSystem:
 
 
 # ==========================================
-# 6. 텔레그램 핸들러 및 봇 실행
+# 6. 텔레그램 핸들러 및 웹 서버(타임아웃 방지) 실행
 # ==========================================
 app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 stock_system = UltimateStockSystem(bot_app=app)
@@ -491,7 +492,23 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(result)
             return
 
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Telegram Trading Bot is running live!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+
 if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT, handle_text_message))
+    
+    # 렌더 웹 서비스 타임아웃 방지를 위한 백그라운드 웹 서버 구동
+    web_thread = threading.Thread(target=run_web)
+    web_thread.daemon = True
+    web_thread.start()
+    
     print("🤖 대한민국 코스피·코스닥 전수 종목 자동 판별 텔레그램 봇이 가동되었습니다.")
     app.run_polling()
