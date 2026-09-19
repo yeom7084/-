@@ -1,0 +1,13 @@
+python-telegram-bot
+yfinance
+pandas
+numpy
+matplotlib
+ta
+google-generativeai
+groq
+apscheduler
+requests
+beautifulsoup4
+python-dotenv
+pytz
