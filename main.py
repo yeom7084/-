@@ -1,9 +1,11 @@
 import os
 import io
+import json
 import logging
 import platform
 import threading
 import asyncio
+import urllib.request
 from flask import Flask
 import pytz
 import pandas as pd
@@ -20,7 +22,6 @@ from telegram.ext import (
     filters
 )
 import google.generativeai as genai
-from openai import OpenAI
 
 # 1. 로깅 설정
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -35,7 +36,7 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. API 키 및 클라이언트 설정
+# 2. API 키 및 설정
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 GEMINI_API_KEY = (
@@ -50,16 +51,11 @@ GPT_OSS_API_KEY = (
     os.environ.get("GROQ_API_KEY") or ""
 ).strip()
 
-GPT_OSS_BASE_URL = os.environ.get("GPT_OSS_BASE_URL", "https://openrouter.ai/api/v1")
+GPT_OSS_BASE_URL = os.environ.get("GPT_OSS_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
-
-gpt_oss_client = OpenAI(
-    api_key=GPT_OSS_API_KEY,
-    base_url=GPT_OSS_BASE_URL
-) if GPT_OSS_API_KEY else None
 
 
 # ==========================================
@@ -97,7 +93,7 @@ class QuickStockResolver:
 
 
 # ==========================================
-# 4. AI 분석 라우터 (gpt-oss-120b & gemini-3.8-flash 연동)
+# 4. AI 분석 라우터 (라이브러리 충돌 없는 순수 HTTP 연동)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -112,17 +108,29 @@ class AIServiceRouter:
         gpt_error = ""
         gemini_error = ""
 
-        # 1차 시도: openai/gpt-oss-120b
+        # 1차 시도: openai/gpt-oss-120b (urllib을 이용한 안전한 순수 HTTP 호출)
         try:
-            if gpt_oss_client:
-                comp = gpt_oss_client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
-                    messages=[{"role": "user", "content": full_prompt}],
-                    temperature=0.2,
-                    timeout=25
+            if GPT_OSS_API_KEY:
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {GPT_OSS_API_KEY}"
+                }
+                payload = {
+                    "model": "openai/gpt-oss-120b",
+                    "messages": [{"role": "user", "content": full_prompt}],
+                    "temperature": 0.2
+                }
+                req = urllib.request.Request(
+                    GPT_OSS_BASE_URL,
+                    data=json.dumps(payload).encode('utf-8'),
+                    headers=headers,
+                    method="POST"
                 )
-                if comp.choices and comp.choices[0].message.content:
-                    return f"⚡ **[gpt-oss-120b 심층 분석 리포트]**\n\n" + comp.choices[0].message.content
+                with urllib.request.urlopen(req, timeout=25) as response:
+                    res_data = json.loads(response.read().decode('utf-8'))
+                    content = res_data['choices'][0]['message']['content']
+                    if content:
+                        return f"⚡ **[gpt-oss-120b 심층 분석 리포트]**\n\n" + content
         except Exception as e:
             gpt_error = str(e)
             logger.warning(f"gpt-oss-120b 호출 오류 (Gemini 3.8 Flash로 전환 시도): {e}")
@@ -320,7 +328,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Comprehensive Stock Bot is running live!", 200
+    return "Telegram Comprehensive Stock Bot with GPT-OSS-120B & Gemini 3.8 Flash is running live!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
