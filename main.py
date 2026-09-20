@@ -44,7 +44,6 @@ GEMINI_API_KEY = (
     os.environ.get("GEMINI_KEY") or ""
 ).strip()
 
-# openai/gpt-oss-120b 또는 일반 Groq/OpenAI 호환 API 키 (OpenRouter, Groq 등)
 GPT_OSS_API_KEY = (
     os.environ.get("GPT_OSS_API_KEY") or 
     os.environ.get("OPENAI_API_KEY") or 
@@ -113,7 +112,7 @@ class AIServiceRouter:
         gpt_error = ""
         gemini_error = ""
 
-        # 1차 시도: openai/gpt-oss-120b (고성능 추론 모델)
+        # 1차 시도: openai/gpt-oss-120b
         try:
             if gpt_oss_client:
                 comp = gpt_oss_client.chat.completions.create(
@@ -128,7 +127,7 @@ class AIServiceRouter:
             gpt_error = str(e)
             logger.warning(f"gpt-oss-120b 호출 오류 (Gemini 3.8 Flash로 전환 시도): {e}")
 
-        # 2차 시도: gemini-3.8-flash (고속 멀티모달 플래시 모델)
+        # 2차 시도: gemini-3.8-flash
         try:
             if GEMINI_API_KEY:
                 model = genai.GenerativeModel('gemini-3.8-flash')
@@ -321,7 +320,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Comprehensive Stock Bot with GPT-OSS-120B & Gemini 3.8 Flash is running live!", 200
+    return "Telegram Comprehensive Stock Bot is running live!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -349,4 +348,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```어떤 내용(그거)을 말씀하시는지 조금만 더 알려주시면,
