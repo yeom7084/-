@@ -108,7 +108,7 @@ class AIServiceRouter:
         # 1차 시도: Gemini
         try:
             if GEMINI_API_KEY:
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-3.8-flash')
                 content = [full_prompt, {'mime_type': 'image/png', 'data': image_bytes}] if image_bytes else [full_prompt]
                 res = model.generate_content(content)
                 if res and res.text:
