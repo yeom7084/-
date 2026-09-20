@@ -121,7 +121,7 @@ class AIServiceRouter:
         try:
             if groq_client:
                 comp = groq_client.chat.completions.create(
-                    model="GPT OSS 120B",
+                    model="openai/gpt-oss-120b",
                     messages=[{"role": "user", "content": full_prompt}],
                     temperature=0.2
                 )
