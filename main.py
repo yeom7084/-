@@ -21,7 +21,6 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-import google.generativeai as genai
 
 # 1. 로깅 설정
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -36,26 +35,12 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. API 키 및 설정
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+# 2. API 설정 (OpenAI 제거 및 GROQ_API_KEY / GEMINI_API_KEY 공존 설정)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
+GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
 
-GEMINI_API_KEY = (
-    os.environ.get("GEMINI_API_KEY") or 
-    os.environ.get("GOOGLE_API_KEY") or 
-    os.environ.get("GEMINI_KEY") or ""
-).strip()
-
-GPT_OSS_API_KEY = (
-    os.environ.get("GPT_OSS_API_KEY") or 
-    os.environ.get("OPENAI_API_KEY") or 
-    os.environ.get("GROQ_API_KEY") or ""
-).strip()
-
-GPT_OSS_BASE_URL = os.environ.get("GPT_OSS_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
-
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
+GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions")
 
 
 # ==========================================
@@ -93,9 +78,40 @@ class QuickStockResolver:
 
 
 # ==========================================
-# 4. AI 분석 라우터 (라이브러리 충돌 없는 순수 HTTP 연동)
+# 4. AI 서비스 라우터 (Groq 중심 및 Gemini 유지)
 # ==========================================
 class AIServiceRouter:
+    @staticmethod
+    def call_groq(prompt: str) -> str:
+        """Groq API 호출 함수"""
+        if not GROQ_API_KEY:
+            raise Exception("GROQ_API_KEY가 설정되지 않았습니다.")
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {GROQ_API_KEY}"
+        }
+        
+        payload = {
+            "model": "openai/gpt-oss-120b", # 또는 Groq 표준 모델명 (예: llama-3.3-70b-versatile 등 필요시 변경 가능)
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2
+        }
+        
+        req = urllib.request.Request(
+            GROQ_BASE_URL,
+            data=json.dumps(payload).encode('utf-8'),
+            headers=headers,
+            method="POST"
+        )
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            content = res_data['choices'][0]['message']['content']
+            if content:
+                return f"⚡ **[Groq AI 분석 리포트]**\n\n" + content
+        raise Exception("Groq API 응답 내용이 비어 있습니다.")
+
     @staticmethod
     def analyze(prompt: str, image_bytes: bytes = None) -> str:
         sys_instruction = (
@@ -104,53 +120,37 @@ class AIServiceRouter:
             "순서로 확인하고 긍정적인 근거와 부정적인 근거를 균형 있게 마크다운 요약 형태로 작성해주세요.\n\n"
         )
         full_prompt = sys_instruction + prompt
-        
-        gpt_error = ""
-        gemini_error = ""
 
-        # 1차 시도: openai/gpt-oss-120b (urllib을 이용한 안전한 순수 HTTP 호출)
-        try:
-            if GPT_OSS_API_KEY:
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {GPT_OSS_API_KEY}"
-                }
-                payload = {
-                    "model": "openai/gpt-oss-120b",
-                    "messages": [{"role": "user", "content": full_prompt}],
-                    "temperature": 0.2
-                }
-                req = urllib.request.Request(
-                    GPT_OSS_BASE_URL,
-                    data=json.dumps(payload).encode('utf-8'),
-                    headers=headers,
-                    method="POST"
-                )
-                with urllib.request.urlopen(req, timeout=25) as response:
-                    res_data = json.loads(response.read().decode('utf-8'))
-                    content = res_data['choices'][0]['message']['content']
-                    if content:
-                        return f"⚡ **[gpt-oss-120b 심층 분석 리포트]**\n\n" + content
-        except Exception as e:
-            gpt_error = str(e)
-            logger.warning(f"gpt-oss-120b 호출 오류 (Gemini 3.8 Flash로 전환 시도): {e}")
+        # 1순위: Groq API 시도
+        if GROQ_API_KEY:
+            try:
+                return AIServiceRouter.call_groq(full_prompt)
+            except Exception as e:
+                logger.warning(f"Groq API 호출 실패, Gemini Fallback 시도 중... 오류: {e}")
 
-        # 2차 시도: gemini-3.8-flash
-        try:
-            if GEMINI_API_KEY:
-                model = genai.GenerativeModel('gemini-3.8-flash')
-                content = [full_prompt, {'mime_type': 'image/png', 'data': image_bytes}] if image_bytes else [full_prompt]
-                res = model.generate_content(content)
-                if res and res.text:
-                    return f"🤖 **[gemini-3.8-flash 분석 리포트]**\n\n" + res.text
-        except Exception as e:
-            gemini_error = str(e)
-            logger.warning(f"gemini-3.8-flash 호출 오류: {e}")
+        # 2순위: Gemini API Fallback (Gemini 키가 설정되어 있는 경우)
+        if GEMINI_API_KEY:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=GEMINI_API_KEY)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                
+                content_payload = [full_prompt]
+                if image_bytes:
+                    content_payload.append({"mime_type": "image/png", "data": image_bytes})
+                
+                response = model.generate_content(content_payload)
+                if response and response.text:
+                    return f"✨ **[Gemini AI 분석 리포트]**\n\n" + response.text
+            except Exception as ge:
+                logger.warning(f"Gemini API 호출도 실패함: {ge}")
 
+        # 모든 AI 실패 시 기본 안내 반환
         return (
-            f"⚠️ **모든 AI 분석 엔진 호출에 실패했습니다.**\n\n"
-            f"• **gpt-oss-120b 오류:** `{gpt_error or '키 없음 또는 응답 지연'}`\n"
-            f"• **gemini-3.8-flash 오류:** `{gemini_error or '키 없음 또는 응답 지연'}`\n"
+            f"💡 **[기본 기술/데이터 분석 안내]**\n\n"
+            f"사용 가능한 AI API(Groq 또는 Gemini) 호출에 실패하여 기본 분석 결과만 제공합니다.\n\n"
+            f"• **요청 내용:** {prompt}\n"
+            f"• **점검 포인트:** 현재가 기준 거래량 추이, 단기 이평선(5일/20일) 지지 여부, 수급 변동성을 확인하세요."
         )
 
 
@@ -328,7 +328,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Comprehensive Stock Bot with GPT-OSS-120B & Gemini 3.8 Flash is running live!", 200
+    return "Telegram Comprehensive Stock Bot (Groq + Gemini Mode) is running live!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
