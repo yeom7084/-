@@ -3,6 +3,7 @@ import io
 import logging
 import platform
 import threading
+import asyncio
 from flask import Flask
 import pytz
 import pandas as pd
@@ -19,7 +20,7 @@ from telegram.ext import (
     filters
 )
 import google.generativeai as genai
-from groq import Groq
+from openai import OpenAI
 
 # 1. 로깅 설정
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -34,7 +35,7 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. API 키 유연한 탐색 (어떤 변수명으로 넣었든 찾아냄)
+# 2. API 키 및 클라이언트 설정
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 GEMINI_API_KEY = (
@@ -43,16 +44,23 @@ GEMINI_API_KEY = (
     os.environ.get("GEMINI_KEY") or ""
 ).strip()
 
-GROQ_API_KEY = (
-    os.environ.get("GROQ_API_KEY") or 
-    os.environ.get("GROQ_KEY") or ""
+# openai/gpt-oss-120b 또는 일반 Groq/OpenAI 호환 API 키 (OpenRouter, Groq 등)
+GPT_OSS_API_KEY = (
+    os.environ.get("GPT_OSS_API_KEY") or 
+    os.environ.get("OPENAI_API_KEY") or 
+    os.environ.get("GROQ_API_KEY") or ""
 ).strip()
+
+GPT_OSS_BASE_URL = os.environ.get("GPT_OSS_BASE_URL", "https://openrouter.ai/api/v1")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+gpt_oss_client = OpenAI(
+    api_key=GPT_OSS_API_KEY,
+    base_url=GPT_OSS_BASE_URL
+) if GPT_OSS_API_KEY else None
 
 
 # ==========================================
@@ -90,7 +98,7 @@ class QuickStockResolver:
 
 
 # ==========================================
-# 4. AI 분석 라우터 (구체적인 에러 출력 버전)
+# 4. AI 분석 라우터 (gpt-oss-120b & gemini-3.8-flash 연동)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -102,41 +110,43 @@ class AIServiceRouter:
         )
         full_prompt = sys_instruction + prompt
         
+        gpt_error = ""
         gemini_error = ""
-        groq_error = ""
 
-        # 1차 시도: Gemini
+        # 1차 시도: openai/gpt-oss-120b (고성능 추론 모델)
+        try:
+            if gpt_oss_client:
+                comp = gpt_oss_client.chat.completions.create(
+                    model="openai/gpt-oss-120b",
+                    messages=[{"role": "user", "content": full_prompt}],
+                    temperature=0.2,
+                    timeout=25
+                )
+                if comp.choices and comp.choices[0].message.content:
+                    return f"⚡ **[gpt-oss-120b 심층 분석 리포트]**\n\n" + comp.choices[0].message.content
+        except Exception as e:
+            gpt_error = str(e)
+            logger.warning(f"gpt-oss-120b 호출 오류 (Gemini 3.8 Flash로 전환 시도): {e}")
+
+        # 2차 시도: gemini-3.8-flash (고속 멀티모달 플래시 모델)
         try:
             if GEMINI_API_KEY:
                 model = genai.GenerativeModel('gemini-3.8-flash')
                 content = [full_prompt, {'mime_type': 'image/png', 'data': image_bytes}] if image_bytes else [full_prompt]
                 res = model.generate_content(content)
                 if res and res.text:
-                    return f"🤖 **[Gemini 심층 분석 리포트]**\n\n" + res.text
+                    return f"🤖 **[gemini-3.8-flash 분석 리포트]**\n\n" + res.text
         except Exception as e:
             gemini_error = str(e)
-            logger.warning(f"Gemini API 호출 오류: {e}")
-
-        # 2차 시도: Groq
-        try:
-            if groq_client:
-                comp = groq_client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
-                    messages=[{"role": "user", "content": full_prompt}],
-                    temperature=0.2
-                )
-                if comp.choices[0].message.content:
-                    return f"⚡ **[Groq 심층 분석 리포트]**\n\n" + comp.choices[0].message.content
-        except Exception as e:
-            groq_error = str(e)
-            logger.warning(f"Groq API 호출 오류: {e}")
+            logger.warning(f"gemini-3.8-flash 호출 오류: {e}")
 
         return (
-            f"⚠️ **AI 분석 엔진 호출 실패**\n\n"
-            f"• **Gemini 오류 내용:** `{gemini_error or '키가 없거나 응답 없음'}`\n"
-            f"• **Groq 오류 내용:** `{groq_error or '키가 없거나 응답 없음'}`\n\n"
-            f"위 에러 내용을 확인해주시면 즉시 해결해 드리겠습니다!"
+            f"⚠️ **모든 AI 분석 엔진 호출에 실패했습니다.**\n\n"
+            f"• **gpt-oss-120b 오류:** `{gpt_error or '키 없음 또는 응답 지연'}`\n"
+            f"• **gemini-3.8-flash 오류:** `{gemini_error or '키 없음 또는 응답 지연'}`\n"
         )
+
+
 # ==========================================
 # 5. 차트 및 기술적 지표 생성기
 # ==========================================
@@ -194,8 +204,6 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
     cmd = parts[0].replace("!", "").replace("/", "").lower()
     arg = parts[1] if len(parts) > 1 else ""
 
-    logger.info(f"수신된 명령어: {cmd}, 인자값: {arg}")
-
     if cmd in ["설명", "help", "스타트", "start"]:
         await update.message.reply_text(
             "🤖 **[주식 종합 분석 봇 명령어 가이드]**\n\n"
@@ -228,15 +236,15 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"📊 [{name}] 주가 데이터 수집 및 차트 시각화 중...")
         
         try:
-            df = yf.download(ticker, period=p, progress=False)
+            df = await asyncio.to_thread(yf.download, ticker, period=p, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
             if df.empty:
                 await update.message.reply_text("❌ 종목 데이터를 찾을 수 없습니다.")
                 return
 
-            img_bytes, cp = generate_chart(df, f"{name} ({ticker})")
-            report = AIServiceRouter.analyze(f"종목: {name}({ticker}), 현재가: {cp:,.2f}원. 차트와 기술적 지표를 바탕으로 추세, 지지/저항, 단기·중기 전망을 분석해주세요.", img_bytes)
+            img_bytes, cp = await asyncio.to_thread(generate_chart, df, f"{name} ({ticker})")
+            report = await asyncio.to_thread(AIServiceRouter.analyze, f"종목: {name}({ticker}), 현재가: {cp:,.2f}원. 차트와 기술적 지표를 바탕으로 추세, 지지/저항, 단기·중기 전망을 분석해주세요.", img_bytes)
             
             await update.message.reply_photo(photo=img_bytes, caption=f"📊 [{name}] 기술적 추세 분석")
             await update.message.reply_text(report, parse_mode="Markdown")
@@ -247,7 +255,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
     if cmd in ["손절가"]:
         ticker, name = QuickStockResolver.resolve(arg)
         try:
-            df = yf.download(ticker, period="5d", progress=False)
+            df = await asyncio.to_thread(yf.download, ticker, period="5d", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
             cp = float(df['Close'].iloc[-1])
@@ -267,13 +275,13 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
     if cmd in ["투자검사"]:
         ticker, name = QuickStockResolver.resolve(arg)
         try:
-            df = yf.download(ticker, period="3mo", progress=False)
+            df = await asyncio.to_thread(yf.download, ticker, period="3mo", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
             cp = float(df['Close'].iloc[-1])
             
             prompt = f"종목: {name}({ticker}), 현재가: {cp}원. 수급, 뉴스, 실적, 차트, 지지/저항을 종합 검사하여 🟢 매수 적절 / 🟡 조건부 매수 / 🔴 매수 부적절 판정과 함께 매수 적정가, 손절가, 1·2차 익절가를 제시해주세요."
-            report = AIServiceRouter.analyze(prompt)
+            report = await asyncio.to_thread(AIServiceRouter.analyze, prompt)
             await update.message.reply_text(f"🔍 **[{name}] 종합 투자검사 결과**\n\n" + report, parse_mode="Markdown")
         except Exception as e:
             await update.message.reply_text(f"⚠️ 오류 발생: {e}")
@@ -299,7 +307,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if cmd in general_queries:
         await update.message.reply_text(f"⏳ `{cmd}` 분석을 수행 중입니다. 잠시만 기다려주세요...", parse_mode="Markdown")
-        report = AIServiceRouter.analyze(general_queries[cmd])
+        report = await asyncio.to_thread(AIServiceRouter.analyze, general_queries[cmd])
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
@@ -313,7 +321,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Comprehensive Stock Bot is running live!", 200
+    return "Telegram Comprehensive Stock Bot with GPT-OSS-120B & Gemini 3.8 Flash is running live!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -341,3 +349,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```어떤 내용(그거)을 말씀하시는지 조금만 더 알려주시면,
