@@ -90,7 +90,7 @@ class QuickStockResolver:
 
 
 # ==========================================
-# 4. AI 분석 라우터 (디버깅 로그 추가)
+# 4. AI 분석 라우터 (구체적인 에러 출력 버전)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -102,8 +102,8 @@ class AIServiceRouter:
         )
         full_prompt = sys_instruction + prompt
         
-        # 키 상태 로깅 (렌더 로그에서 확인 가능)
-        logger.info(f"AI 분석 시도 - Gemini Key 존재 여부: {bool(GEMINI_API_KEY)}, Groq Key 존재 여부: {bool(GROQ_API_KEY)}")
+        gemini_error = ""
+        groq_error = ""
 
         # 1차 시도: Gemini
         try:
@@ -111,9 +111,10 @@ class AIServiceRouter:
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 content = [full_prompt, {'mime_type': 'image/png', 'data': image_bytes}] if image_bytes else [full_prompt]
                 res = model.generate_content(content)
-                if res.text:
+                if res and res.text:
                     return f"🤖 **[Gemini 심층 분석 리포트]**\n\n" + res.text
         except Exception as e:
+            gemini_error = str(e)
             logger.warning(f"Gemini API 호출 오류: {e}")
 
         # 2차 시도: Groq
@@ -127,11 +128,15 @@ class AIServiceRouter:
                 if comp.choices[0].message.content:
                     return f"⚡ **[Groq 심층 분석 리포트]**\n\n" + comp.choices[0].message.content
         except Exception as e:
+            groq_error = str(e)
             logger.warning(f"Groq API 호출 오류: {e}")
 
-        return f"⚠️ AI 분석 엔진을 호출할 수 없습니다.\n(현재 입력된 Gemini Key 길이: {len(GEMINI_API_KEY)}, Groq Key 길이: {len(GROQ_API_KEY)})\n렌더 환경 변수에 올바른 API 키가 입력되었는지 확인해주세요."
-
-
+        return (
+            f"⚠️ **AI 분석 엔진 호출 실패**\n\n"
+            f"• **Gemini 오류 내용:** `{gemini_error or '키가 없거나 응답 없음'}`\n"
+            f"• **Groq 오류 내용:** `{groq_error or '키가 없거나 응답 없음'}`\n\n"
+            f"위 에러 내용을 확인해주시면 즉시 해결해 드리겠습니다!"
+        )
 # ==========================================
 # 5. 차트 및 기술적 지표 생성기
 # ==========================================
