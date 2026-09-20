@@ -1,12 +1,9 @@
+flask
+pytz
 pandas
 numpy
 yfinance
 matplotlib
-google-generativeai
-groq
-beautifulsoup4
 python-telegram-bot
-apscheduler
-pytz
-flask
-requests
+google-generativeai
+openai
