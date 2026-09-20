@@ -21,7 +21,7 @@ from telegram.ext import (
 import google.generativeai as genai
 from groq import Groq
 
-# 1. 로깅 및 환경 설정
+# 1. 로깅 설정
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 KST = pytz.timezone('Asia/Seoul')
@@ -34,9 +34,19 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
+# 2. API 키 유연한 탐색 (어떤 변수명으로 넣었든 찾아냄)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+GEMINI_API_KEY = (
+    os.environ.get("GEMINI_API_KEY") or 
+    os.environ.get("GOOGLE_API_KEY") or 
+    os.environ.get("GEMINI_KEY") or ""
+).strip()
+
+GROQ_API_KEY = (
+    os.environ.get("GROQ_API_KEY") or 
+    os.environ.get("GROQ_KEY") or ""
+).strip()
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -46,11 +56,11 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
 # ==========================================
-# 2. 종목 코드 판별기 (한글/코드 자동 매핑)
+# 3. 종목 코드 판별기
 # ==========================================
 class QuickStockResolver:
     KNOWN_STOCKS = {
-        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "테웅": "044780.KQ", 
+        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "태웅": "044780.KQ", 
         "에코프로": "086520.KQ", "에코프로비엠": "247540.KS", "셀트리온": "068270.KS",
         "LG에너지솔루션": "373220.KS", "현대차": "005380.KS", "기아": "000270.KS"
     }
@@ -80,7 +90,7 @@ class QuickStockResolver:
 
 
 # ==========================================
-# 3. AI 분석 라우터 (Gemini / Groq)
+# 4. AI 분석 라우터 (디버깅 로그 추가)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -92,6 +102,10 @@ class AIServiceRouter:
         )
         full_prompt = sys_instruction + prompt
         
+        # 키 상태 로깅 (렌더 로그에서 확인 가능)
+        logger.info(f"AI 분석 시도 - Gemini Key 존재 여부: {bool(GEMINI_API_KEY)}, Groq Key 존재 여부: {bool(GROQ_API_KEY)}")
+
+        # 1차 시도: Gemini
         try:
             if GEMINI_API_KEY:
                 model = genai.GenerativeModel('gemini-1.5-flash')
@@ -100,8 +114,9 @@ class AIServiceRouter:
                 if res.text:
                     return f"🤖 **[Gemini 심층 분석 리포트]**\n\n" + res.text
         except Exception as e:
-            logger.warning(f"Gemini 오류: {e}")
+            logger.warning(f"Gemini API 호출 오류: {e}")
 
+        # 2차 시도: Groq
         try:
             if groq_client:
                 comp = groq_client.chat.completions.create(
@@ -112,13 +127,13 @@ class AIServiceRouter:
                 if comp.choices[0].message.content:
                     return f"⚡ **[Groq 심층 분석 리포트]**\n\n" + comp.choices[0].message.content
         except Exception as e:
-            logger.warning(f"Groq 오류: {e}")
+            logger.warning(f"Groq API 호출 오류: {e}")
 
-        return "⚠️ AI 분석 엔진을 호출할 수 없습니다. API 키를 확인해주세요."
+        return f"⚠️ AI 분석 엔진을 호출할 수 없습니다.\n(현재 입력된 Gemini Key 길이: {len(GEMINI_API_KEY)}, Groq Key 길이: {len(GROQ_API_KEY)})\n렌더 환경 변수에 올바른 API 키가 입력되었는지 확인해주세요."
 
 
 # ==========================================
-# 4. 차트 및 기술적 지표 생성기
+# 5. 차트 및 기술적 지표 생성기
 # ==========================================
 def generate_chart(df: pd.DataFrame, name: str) -> tuple:
     df = df.copy()
@@ -128,7 +143,6 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
     x = np.arange(len(df))
     
-    # 캔들스틱 대안 (바 그래프)
     up = df['Close'] >= df['Open']
     ax1.bar(x[up], df['Close'][up] - df['Open'][up], bottom=df['Open'][up], color='#ef5350', width=0.8)
     ax1.vlines(x[up], df['Low'][up], df['High'][up], color='#ef5350')
@@ -142,7 +156,6 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
     ax1.legend(loc='upper left', fontsize=8)
     ax1.grid(True, alpha=0.3)
 
-    # RSI
     delta = df['Close'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
@@ -162,7 +175,7 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
 
 
 # ==========================================
-# 5. 전체 명령어 통합 핸들러 (메인 라우터)
+# 6. 전체 명령어 통합 핸들러
 # ==========================================
 async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -178,37 +191,31 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     logger.info(f"수신된 명령어: {cmd}, 인자값: {arg}")
 
-    # 1. 안내 및 설명 명령어
     if cmd in ["설명", "help", "스타트", "start"]:
         await update.message.reply_text(
             "🤖 **[주식 종합 분석 봇 명령어 가이드]**\n\n"
             "📰 **뉴스 및 실적 분석**\n"
-            "• `!뉴스분석 [링크 또는 내용]` - 호재/악재 및 단·중기 영향 분석\n"
-            "• `!뉴스기간 [종목] [기간]` - 예: `!뉴스기간 삼성전자 6개월`\n"
-            "• `!실적발표 [종목]` - 컨센서스 비교 및 YoY/QoQ 분석\n"
+            "• `!뉴스분석 [링크 또는 내용]`\n"
+            "• `!뉴스기간 [종목] [기간]`\n"
+            "• `!실적발표 [종목]`\n"
             "• `!저평가` / `!서프라이즈` / `!목표주가변경` / `!비교 [경쟁사]`\n\n"
             "📈 **차트 및 추세 분석**\n"
-            "• `!추세 [종목] [기간]` - 예: `!추세 삼성전자 6개월` (차트+AI리포트)\n"
-            "• `!트렌드 [종목]` - 거래량/외인수급 중심 추세전환 분석\n"
-            "• `!손절가 [종목]` - 보수/중립/공격적 3단계 손절선 산출\n\n"
+            "• `!추세 [종목] [기간]` (예: `!추세 삼성전자 6개월`)\n"
+            "• `!트렌드 [종목]`\n"
+            "• `!손절가 [종목]`\n\n"
             "💰 **매매 판단 및 거시분석**\n"
-            "• `!투자검사 [종목]` - 종합 매매 적절성 검사 (매수적정가/손절가)\n"
-            "• `!본전 [종목]` - 본전 필요 상승률 및 물타기 분석\n"
-            "• `!거시분석` / `!이벤트`\n\n"
-            "📦 **포트폴리오 및 투자복기**\n"
-            "• `!보유종목` / `!포트폴리오` / `!투자복기` / `!투자일기`",
+            "• `!투자검사 [종목]`\n"
+            "• `!본전 [종목]`\n"
+            "• `!거시분석` / `!이벤트`",
             parse_mode="Markdown"
         )
         return
 
-    # 2. 추세 및 차트 명령어 (!추세, !차트)
     if cmd in ["추세", "차트"]:
-        # 예: !추세 삼성전자 6개월 -> arg = "삼성전자 6개월"
         query_parts = arg.split()
         target_name = query_parts[0] if query_parts else "삼성전자"
-        period_str = query_parts[1] if len(query_parts) > 1 else "6mo"
+        period_str = query_parts[1] if len(query_parts) > 1 else "6개월"
         
-        # 기간 매핑
         period_map = {"1개월": "1mo", "3개월": "3mo", "6개월": "6mo", "1년": "1y", "3년": "3y"}
         p = period_map.get(period_str, "6mo")
 
@@ -232,7 +239,6 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"⚠️ 오류 발생: {e}")
         return
 
-    # 3. 손절가 명령어 (!손절가)
     if cmd in ["손절가"]:
         ticker, name = QuickStockResolver.resolve(arg)
         try:
@@ -246,15 +252,13 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"• 현재 종가: `{cp:,.2f}원`\n"
                 f"• 보수적 손절선 (-3%): `{cp * 0.97:,.2f}원`\n"
                 f"• 중립적 손절선 (-6%): `{cp * 0.94:,.2f}원`\n"
-                f"• 공격적 손절선 (-10%): `{cp * 0.90:,.2f}원`\n\n"
-                f"※ 수급과 지지선을 함께 고려하여 대응하세요.",
+                f"• 공격적 손절선 (-10%): `{cp * 0.90:,.2f}원`",
                 parse_mode="Markdown"
             )
         except Exception as e:
             await update.message.reply_text(f"⚠️ 오류 발생: {e}")
         return
 
-    # 4. 투자검사 명령어 (!투자검사)
     if cmd in ["투자검사"]:
         ticker, name = QuickStockResolver.resolve(arg)
         try:
@@ -270,11 +274,9 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"⚠️ 오류 발생: {e}")
         return
 
-    # 5. 기타 모든 전문 분석 명령어 처리 (뉴스분석, 실적발표, 거시분석 등)
     general_queries = {
         "뉴스분석": f"다음 뉴스/링크 내용에 대해 호재/악재 여부, 단기·중기 영향, 핵심 근거와 리스크를 분석해주세요: {arg}",
         "뉴스기간": f"종목 '{arg}'에 대한 최근 기간별 뉴스를 분석하고, 사업·실적·수급·주가 연관성 및 선반영 여부를 분석해주세요.",
-        "뉴스실적": f"종목 '{arg}'의 최근 뉴스가 실제 매출 및 영업이익으로 이어졌는지(구조적 개선 vs 일회성) 분석해주세요.",
         "실적발표": f"종목 '{arg}'의 실적 발표 결과, 컨센서스 비교, YoY/QoQ, 향후 분기 전망을 분석해주세요.",
         "저평가": "최근 분기 영업이익 및 매출 성장, PER/PBR/ROE를 기준으로 저평가 유망 종목을 탐색하고 분석해주세요.",
         "서프라이즈": "최근 6개월간 실적 서프라이즈를 기록한 주요 종목들의 특징과 주가 반응을 분석해주세요.",
@@ -300,7 +302,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ==========================================
-# 6. Flask 웹 서버 (Render 생존 유지용)
+# 7. Flask 웹 서버
 # ==========================================
 web_app = Flask(__name__)
 
@@ -314,7 +316,7 @@ def run_web():
 
 
 # ==========================================
-# 7. 메인 실행 함수
+# 8. 메인 실행 함수
 # ==========================================
 def main():
     if not TELEGRAM_BOT_TOKEN:
@@ -323,11 +325,9 @@ def main():
 
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # 모든 텍스트 메시지 및 명령어 통합 수신기 등록 (느낌표 및 슬래시 모두 완벽 수용)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_commands))
     application.add_handler(MessageHandler(filters.COMMAND, handle_all_commands))
 
-    # Flask 서버 백그라운드 구동
     threading.Thread(target=run_web, daemon=True).start()
     logger.info("🌐 Flask 웹 서버 스레드가 시작되었습니다.")
 
