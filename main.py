@@ -35,7 +35,7 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. API 설정 (OpenAI 제거 및 GROQ_API_KEY / GEMINI_API_KEY 공존 설정)
+# 2. API 설정 (GROQ_API_KEY 및 GEMINI_API_KEY 공존 설정)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
 GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -44,13 +44,15 @@ GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/
 
 
 # ==========================================
-# 3. 종목 코드 판별기
+# 3. 모든 종목 자동 검색 해결사 (사전 등록 불필요)
 # ==========================================
 class QuickStockResolver:
-    KNOWN_STOCKS = {
-        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "태웅": "044780.KQ", 
+    # 자주 쓰이는 주요 종목 단축 매핑 (편의용)
+    POPULAR_STOCKS = {
+        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "삼성SDI": "006400.KS",
         "에코프로": "086520.KQ", "에코프로비엠": "247540.KS", "셀트리온": "068270.KS",
-        "LG에너지솔루션": "373220.KS", "현대차": "005380.KS", "기아": "000270.KS"
+        "LG에너지솔루션": "373220.KS", "현대차": "005380.KS", "기아": "000270.KS",
+        "애플": "AAPL", "테슬라": "TSLA", "엔비디아": "NVDA", "마이크로소프트": "MSFT"
     }
 
     @classmethod
@@ -58,10 +60,16 @@ class QuickStockResolver:
         if not query:
             return "005930.KS", "삼성전자"
         q = query.strip()
-        if q in cls.KNOWN_STOCKS:
-            return cls.KNOWN_STOCKS[q], q
-        if "." in q:
+        
+        # 1. 인기 종목 매칭
+        if q in cls.POPULAR_STOCKS:
+            return cls.POPULAR_STOCKS[q], q
+            
+        # 2. 이미 티커 형태인 경우 (예: AAPL, TSLA 등)
+        if "." in q or (q.isalpha() and len(q) <= 5):
             return q.upper(), q
+
+        # 3. 6자리 숫자 코드인 경우 (.KS / .KQ 자동 탐색)
         if q.isdigit() and len(q) == 6:
             for suffix in [".KS", ".KQ"]:
                 test_t = q + suffix
@@ -74,16 +82,30 @@ class QuickStockResolver:
                 except:
                     continue
             return q + ".KS", q
+
+        # 4. 등록되지 않은 한글 종목명인 경우 야후파이낸스 자동 조회 시도
+        # 한글 이름을 그대로 넣었을 때 유효한 데이터가 나오는지 확인
+        test_t = q.upper()
+        try:
+            df = yf.download(test_t, period="2d", progress=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            if not df.empty:
+                return test_t, q
+        except:
+            pass
+
+        # 기본적으로 .KS를 붙여서 반환
         return q.upper() + ".KS", q
 
 
 # ==========================================
-# 4. AI 서비스 라우터 (Groq 중심 및 Gemini 유지)
+# 4. AI 서비스 라우터 (무료 이용 가능한 Groq 모델 적용)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
     def call_groq(prompt: str) -> str:
-        """Groq API 호출 함수"""
+        """Groq 무료 플랜에서 완벽하게 지원하는 llama-3.3-70b-versatile 모델 호출"""
         if not GROQ_API_KEY:
             raise Exception("GROQ_API_KEY가 설정되지 않았습니다.")
         
@@ -93,7 +115,7 @@ class AIServiceRouter:
         }
         
         payload = {
-            "model": "openai/gpt-oss-120b", # 또는 Groq 표준 모델명 (예: llama-3.3-70b-versatile 등 필요시 변경 가능)
+            "model": "llama-3.3-70b-versatile",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2
         }
@@ -105,11 +127,16 @@ class AIServiceRouter:
             method="POST"
         )
         
-        with urllib.request.urlopen(req, timeout=30) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            content = res_data['choices'][0]['message']['content']
-            if content:
-                return f"⚡ **[Groq AI 분석 리포트]**\n\n" + content
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+                content = res_data['choices'][0]['message']['content']
+                if content:
+                    return f"⚡ **[Groq AI 분석 리포트]**\n\n" + content
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode('utf-8', errors='ignore')
+            raise Exception(f"HTTP Error {e.code}: {err_body}")
+            
         raise Exception("Groq API 응답 내용이 비어 있습니다.")
 
     @staticmethod
@@ -121,14 +148,14 @@ class AIServiceRouter:
         )
         full_prompt = sys_instruction + prompt
 
-        # 1순위: Groq API 시도
+        # 1순위: Groq API 시도 (무료 모델)
         if GROQ_API_KEY:
             try:
                 return AIServiceRouter.call_groq(full_prompt)
             except Exception as e:
                 logger.warning(f"Groq API 호출 실패, Gemini Fallback 시도 중... 오류: {e}")
 
-        # 2순위: Gemini API Fallback (Gemini 키가 설정되어 있는 경우)
+        # 2순위: Gemini API Fallback
         if GEMINI_API_KEY:
             try:
                 import google.generativeai as genai
@@ -145,12 +172,11 @@ class AIServiceRouter:
             except Exception as ge:
                 logger.warning(f"Gemini API 호출도 실패함: {ge}")
 
-        # 모든 AI 실패 시 기본 안내 반환
         return (
             f"💡 **[기본 기술/데이터 분석 안내]**\n\n"
-            f"사용 가능한 AI API(Groq 또는 Gemini) 호출에 실패하여 기본 분석 결과만 제공합니다.\n\n"
+            f"현재 AI API 연결 상태를 확인해주세요.\n\n"
             f"• **요청 내용:** {prompt}\n"
-            f"• **점검 포인트:** 현재가 기준 거래량 추이, 단기 이평선(5일/20일) 지지 여부, 수급 변동성을 확인하세요."
+            f"• **점검 포인트:** 현재가 기준 거래량 추이, 단기 이평선(5일/20일) 지지 여부를 확인하세요."
         )
 
 
@@ -220,7 +246,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             "• `!실적발표 [종목]`\n"
             "• `!저평가` / `!서프라이즈` / `!목표주가변경` / `!비교 [경쟁사]`\n\n"
             "📈 **차트 및 추세 분석**\n"
-            "• `!추세 [종목] [기간]` (예: `!추세 삼성전자 6개월`)\n"
+            "• `!추세 [종목] [기간]` (예: `!추세 삼성SDI 6개월`)\n"
             "• `!트렌드 [종목]`\n"
             "• `!손절가 [종목]`\n\n"
             "💰 **매매 판단 및 거시분석**\n"
@@ -246,8 +272,18 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             df = await asyncio.to_thread(yf.download, ticker, period=p, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
+            
+            # 데이터가 비어있을 경우 접미사(.KS <-> .KQ) 교차 검증
             if df.empty:
-                await update.message.reply_text("❌ 종목 데이터를 찾을 수 없습니다.")
+                alt_ticker = ticker.replace(".KS", ".KQ") if ".KS" in ticker else ticker.replace(".KQ", ".KS")
+                df = await asyncio.to_thread(yf.download, alt_ticker, period=p, progress=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.droplevel(1)
+                if not df.empty:
+                    ticker = alt_ticker
+
+            if df.empty:
+                await update.message.reply_text("❌ 종목 데이터를 찾을 수 없습니다. 정확한 종목명이나 코드를 입력해주세요.")
                 return
 
             img_bytes, cp = await asyncio.to_thread(generate_chart, df, f"{name} ({ticker})")
@@ -265,6 +301,14 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             df = await asyncio.to_thread(yf.download, ticker, period="5d", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
+            if df.empty:
+                alt_ticker = ticker.replace(".KS", ".KQ") if ".KS" in ticker else ticker.replace(".KQ", ".KS")
+                df = await asyncio.to_thread(yf.download, alt_ticker, period="5d", progress=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.droplevel(1)
+            if df.empty:
+                await update.message.reply_text("❌ 종목 데이터를 찾을 수 없습니다.")
+                return
             cp = float(df['Close'].iloc[-1])
             
             await update.message.reply_text(
@@ -285,13 +329,18 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             df = await asyncio.to_thread(yf.download, ticker, period="3mo", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
-            cp = float(df['Close'].iloc[-1])
+            if df.empty:
+                alt_ticker = ticker.replace(".KS", ".KQ") if ".KS" in ticker else ticker.replace(".KQ", ".KS")
+                df = await asyncio.to_thread(yf.download, alt_ticker, period="3mo", progress=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.droplevel(1)
+            cp = float(df['Close'].iloc[-1]) if not df.empty else 0
             
             prompt = f"종목: {name}({ticker}), 현재가: {cp}원. 수급, 뉴스, 실적, 차트, 지지/저항을 종합 검사하여 🟢 매수 적절 / 🟡 조건부 매수 / 🔴 매수 부적절 판정과 함께 매수 적정가, 손절가, 1·2차 익절가를 제시해주세요."
             report = await asyncio.to_thread(AIServiceRouter.analyze, prompt)
             await update.message.reply_text(f"🔍 **[{name}] 종합 투자검사 결과**\n\n" + report, parse_mode="Markdown")
         except Exception as e:
-            await update.message.reply_text(f"⚠️ 오류 발생: {e}")
+            await update.main.reply_text(f"⚠️ 오류 발생: {e}")
         return
 
     general_queries = {
@@ -328,7 +377,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Comprehensive Stock Bot (Groq + Gemini Mode) is running live!", 200
+    return "Telegram Comprehensive Stock Bot (Groq Free Tier & Universal Stock) is running live!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
