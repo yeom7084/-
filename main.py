@@ -35,7 +35,7 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. API 설정 (GROQ_API_KEY 및 GEMINI_API_KEY 공존 설정)
+# 2. API 설정 (GROQ_API_KEY 및 Gemini Fallback 공존 설정)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
 GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -47,7 +47,6 @@ GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/
 # 3. 모든 종목 자동 검색 해결사 (사전 등록 불필요)
 # ==========================================
 class QuickStockResolver:
-    # 자주 쓰이는 주요 종목 단축 매핑 (편의용)
     POPULAR_STOCKS = {
         "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "삼성SDI": "006400.KS",
         "에코프로": "086520.KQ", "에코프로비엠": "247540.KS", "셀트리온": "068270.KS",
@@ -61,15 +60,12 @@ class QuickStockResolver:
             return "005930.KS", "삼성전자"
         q = query.strip()
         
-        # 1. 인기 종목 매칭
         if q in cls.POPULAR_STOCKS:
             return cls.POPULAR_STOCKS[q], q
             
-        # 2. 이미 티커 형태인 경우 (예: AAPL, TSLA 등)
         if "." in q or (q.isalpha() and len(q) <= 5):
             return q.upper(), q
 
-        # 3. 6자리 숫자 코드인 경우 (.KS / .KQ 자동 탐색)
         if q.isdigit() and len(q) == 6:
             for suffix in [".KS", ".KQ"]:
                 test_t = q + suffix
@@ -83,8 +79,6 @@ class QuickStockResolver:
                     continue
             return q + ".KS", q
 
-        # 4. 등록되지 않은 한글 종목명인 경우 야후파이낸스 자동 조회 시도
-        # 한글 이름을 그대로 넣었을 때 유효한 데이터가 나오는지 확인
         test_t = q.upper()
         try:
             df = yf.download(test_t, period="2d", progress=False)
@@ -95,17 +89,16 @@ class QuickStockResolver:
         except:
             pass
 
-        # 기본적으로 .KS를 붙여서 반환
         return q.upper() + ".KS", q
 
 
 # ==========================================
-# 4. AI 서비스 라우터 (무료 이용 가능한 Groq 모델 적용)
+# 4. AI 서비스 라우터 (Groq 최고 가성비/준수 모델 적용)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
     def call_groq(prompt: str) -> str:
-        """Groq 무료 플랜에서 완벽하게 지원하는 llama-3.3-70b-versatile 모델 호출"""
+        """Groq 무료 플랜에서 뛰어난 성능을 내는 llama-3.3-70b-versatile 모델 호출"""
         if not GROQ_API_KEY:
             raise Exception("GROQ_API_KEY가 설정되지 않았습니다.")
         
@@ -148,7 +141,7 @@ class AIServiceRouter:
         )
         full_prompt = sys_instruction + prompt
 
-        # 1순위: Groq API 시도 (무료 모델)
+        # 1순위: Groq API 시도 (llama-3.3-70b-versatile)
         if GROQ_API_KEY:
             try:
                 return AIServiceRouter.call_groq(full_prompt)
@@ -273,7 +266,6 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
             
-            # 데이터가 비어있을 경우 접미사(.KS <-> .KQ) 교차 검증
             if df.empty:
                 alt_ticker = ticker.replace(".KS", ".KQ") if ".KS" in ticker else ticker.replace(".KQ", ".KS")
                 df = await asyncio.to_thread(yf.download, alt_ticker, period=p, progress=False)
@@ -340,7 +332,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             report = await asyncio.to_thread(AIServiceRouter.analyze, prompt)
             await update.message.reply_text(f"🔍 **[{name}] 종합 투자검사 결과**\n\n" + report, parse_mode="Markdown")
         except Exception as e:
-            await update.main.reply_text(f"⚠️ 오류 발생: {e}")
+            await update.message.reply_text(f"⚠️ 오류 발생: {e}")
         return
 
     general_queries = {
@@ -377,7 +369,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Comprehensive Stock Bot (Groq Free Tier & Universal Stock) is running live!", 200
+    return "Telegram Comprehensive Stock Bot (Groq Versatile Mode) is running live!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -387,7 +379,7 @@ def run_web():
 # ==========================================
 # 8. 메인 실행 함수
 # ==========================================
-def main():
+main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN이 설정되지 않았습니다!")
         return
