@@ -38,12 +38,14 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. API 토큰 및 환경 변수 설정
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-ADMIN_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions")
+# ==========================================
+# 2. API 토큰 및 키 직접 입력 (하드코딩 설정)
+# ==========================================
+TELEGRAM_BOT_TOKEN = "8778354564:AAHxXkMEdoAeEgj3_q3IHJkfJNqQwVsa7jY"
+GROQ_API_KEY = "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"
+GEMINI_API_KEY = "AQ.Ab8RN6IdEeCVzcXEKuZLG1EgRLE8pi6y9N3nbKa7fiyJRn0QFA"
+ADMIN_CHAT_ID = "8986219602"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 AUTO_TRADING_ACTIVE = True
 
@@ -54,8 +56,8 @@ AUTO_TRADING_ACTIVE = True
 class AIServiceRouter:
     @staticmethod
     def call_groq(prompt: str) -> str:
-        if not GROQ_API_KEY:
-            raise Exception("GROQ_API_KEY 미설정")
+        if not GROQ_API_KEY or GROQ_API_KEY.startswith("여기에"):
+            raise Exception("GROQ_API_KEY가 올바르게 입력되지 않았습니다.")
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GROQ_API_KEY}"}
         payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
         req = urllib.request.Request(GROQ_BASE_URL, data=json.dumps(payload).encode('utf-8'), headers=headers, method="POST")
@@ -70,16 +72,16 @@ class AIServiceRouter:
     def analyze(prompt: str, image_bytes: bytes = None) -> str:
         sys_instruction = "당신은 주식 시장을 24시간 감시하며 자율적으로 매매 기회를 포착하는 AI 관제 시스템입니다. 핵심만 냉철하게 분석해주세요.\n\n"
         full_prompt = sys_instruction + prompt
-        if GROQ_API_KEY and not image_bytes:
+        if GROQ_API_KEY and not GROQ_API_KEY.startswith("여기에") and not image_bytes:
             try:
                 return AIServiceRouter.call_groq(full_prompt)
             except Exception as e:
                 logger.warning(f"Groq 실패, Gemini 전환: {e}")
-        if GEMINI_API_KEY:
+        if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("여기에"):
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=GEMINI_API_KEY)
-                model = genai.GenerativeModel('gemini-3.8-flash')
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 content_payload = [full_prompt]
                 if image_bytes:
                     content_payload.append({"mime_type": "image/png", "data": image_bytes})
@@ -96,7 +98,7 @@ class AIServiceRouter:
 # ==========================================
 def run_autonomous_scanner(app):
     global AUTO_TRADING_ACTIVE
-    if not AUTO_TRADING_ACTIVE or not ADMIN_CHAT_ID:
+    if not AUTO_TRADING_ACTIVE or not ADMIN_CHAT_ID or ADMIN_CHAT_ID.startswith("여기에"):
         return
     logger.info("🤖 [자율 엔진] 시장 스캔 시작...")
     try:
@@ -184,7 +186,7 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
 
 
 # ==========================================
-# 7. 대시보드 및 버튼/명령어 핸들러 (수정 완료)
+# 7. 대시보드 및 버튼/명령어 핸들러
 # ==========================================
 async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO_TRADING_ACTIVE
@@ -237,7 +239,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             report = AIServiceRouter.analyze("현재 한국 주식 시장에서 거래대금이 폭증하고 수급이 집중되는 유망 종목 및 시장 동향을 분석해주세요.")
         except Exception as e:
-            report = f"⚠️ **[AI 분석 실패]**\n원인: {e}\n\n서버 환경 변수(GROQ_API_KEY / GEMINI_API_KEY)를 확인해주세요."
+            report = f"⚠️ **[AI 분석 실패]**\n원인: {e}"
         await context.bot.send_message(chat_id=query.message.chat_id, text=report, parse_mode='Markdown')
         
     elif data == 'realtime_monitor':
@@ -352,7 +354,9 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     elif cmd in ["설정", "config"]:
-        await update.message.reply_text(f"⚙️ **[봇 환경 설정]**\n- Groq API 연동: {'활성화' if GROQ_API_KEY else '비활성화'}\n- Gemini API 연동: {'활성화' if GEMINI_API_KEY else '비활성화'}", parse_mode="Markdown")
+        has_groq = "활성화" if (GROQ_API_KEY and not GROQ_API_KEY.startswith("여기에")) else "비활성화"
+        has_gemini = "활성화" if (GEMINI_API_KEY and not GEMINI_API_KEY.startswith("여기에")) else "비활성화"
+        await update.message.reply_text(f"⚙️ **[봇 환경 설정]**\n- Groq API 연동: {has_groq}\n- Gemini API 연동: {has_gemini}", parse_mode="Markdown")
         return
 
     elif cmd in ["상태", "status"]:
@@ -396,7 +400,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Autonomous AI Stock Trading Bot with 20 Commands is running 24/7!", 200
+    return "Autonomous AI Stock Trading Bot is running 24/7!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -418,8 +422,8 @@ def init_background_scheduler(application):
 # 10. 봇 메인 실행
 # ==========================================
 def main():
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN 미설정!")
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN.startswith("여기에"):
+        logger.error("❌ TELEGRAM_BOT_TOKEN이 올바르게 입력되지 않았습니다!")
         return
 
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -434,7 +438,7 @@ def main():
     threading.Thread(target=run_web, daemon=True).start()
     init_background_scheduler(application)
 
-    logger.info("🚀 20개 명령어 및 버튼 연동 관제 봇이 실행되었습니다.")
+    logger.info("🚀 봇이 정상적으로 실행되었습니다.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
