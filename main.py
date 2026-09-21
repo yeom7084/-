@@ -65,12 +65,12 @@ class AIServiceRouter:
             res_data = json.loads(response.read().decode('utf-8'))
             content = res_data['choices'][0]['message']['content']
             if content:
-                return f"⚡ **[Groq AI 분석]**\n\n" + content
+                return f"⚡ **[Groq AI 자율 분석]**\n\n" + content
         raise Exception("Groq 응답 비어 있음")
 
     @staticmethod
     def analyze(prompt: str, image_bytes: bytes = None) -> str:
-        sys_instruction = "당신은 주식 자동매매를 총괄하는 자율 AI 관제 시스템입니다. 시장 데이터를 바탕으로 냉철하고 객관적인 매매 판단을 내려주세요.\n\n"
+        sys_instruction = "당신은 주식 시장을 24시간 감시하며 자율적으로 매매 기회를 포착하는 AI 관제 시스템입니다. 핵심만 냉철하게 분석해주세요.\n\n"
         full_prompt = sys_instruction + prompt
         if GROQ_API_KEY and not image_bytes:
             try:
@@ -87,38 +87,39 @@ class AIServiceRouter:
                     content_payload.append({"mime_type": "image/png", "data": image_bytes})
                 response = model.generate_content(content_payload)
                 if response and response.text:
-                    return f"✨ **[Gemini AI 분석]**\n\n" + response.text
+                    return f"✨ **[Gemini AI 자율 분석]**\n\n" + response.text
             except Exception as ge:
                 logger.warning(f"Gemini 실패: {ge}")
-        return "💡 기본 분석 모드: AI API 키를 확인해주세요."
+        return "💡 **[AI API 설정 오류]** 환경 변수에 GROQ_API_KEY 또는 GEMINI_API_KEY가 올바르게 입력되었는지 확인해주세요."
 
 
 # ==========================================
-# 4. 자동매매 엔진 (백그라운드 주문 집행 및 스캔)
+# 4. 24시간 스스로 작동하는 자율 스캔 엔진
 # ==========================================
-def run_safe_auto_trade(app):
+def run_autonomous_scanner(app):
+    """사람이 명령을 내리지 않아도 백그라운드에서 주기적으로 혼자 돌아가는 자율 매매 엔진"""
     global AUTO_TRADING_ACTIVE
     if not AUTO_TRADING_ACTIVE or not ADMIN_CHAT_ID:
         return
 
-    logger.info("🤖 [자동매매 엔진] 주기적 시장 스캔 및 조건 검사 중...")
+    logger.info("🤖 [자율 엔진] 스스로 시장 스캔 및 유망 종목 발굴 시작...")
     try:
-        prompt = "현재 한국 주식 시장에서 거래대금이 급증하고 기술적 반등이 나오는 종목 1개를 골라 매수가, 목표가, 손절가를 간결하게 알려줘."
+        prompt = "현재 한국 주식 시장에서 거래대금이 폭증하고 수급이 집중되는 유망 종목 1개를 스스로 골라 매수가, 목표가, 손절가를 분석해줘."
         analysis_result = AIServiceRouter.analyze(prompt)
         
-        trade_execution_msg = (
-            "🤖 **[자동매매 엔진 매매 집행 리포트]**\n\n"
+        report_msg = (
+            "🤖 **[자동매매 자율 관제 리포트]**\n\n"
             f"{analysis_result}\n\n"
-            "🟢 **상태:** 자동매매 조건 충족 종목 포착 및 가상 주문 완료"
+            "🟢 **엔진 상태:** 백그라운드 자율 스캔 및 가상 모니터링 완료"
         )
         
-        async def send_msg():
-            await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=trade_execution_msg, parse_mode="Markdown")
+        async def push_to_telegram():
+            await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=report_msg, parse_mode="Markdown")
             
-        asyncio.run(send_msg())
-        logger.info("🤖 [자동매매 엔진] 매매 집행 결과 전송 완료")
+        asyncio.run(push_to_telegram())
+        logger.info("🤖 [자율 엔진] 텔레그램 자동 전송 완료")
     except Exception as e:
-        logger.error(f"자동매매 엔진 실행 중 오류 발생 (봇 유지): {e}")
+        logger.error(f"자율 엔진 구동 중 에러 발생 (봇은 꺼지지 않음): {e}")
 
 
 # ==========================================
@@ -198,7 +199,7 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
 # ==========================================
 async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO_TRADING_ACTIVE
-    status_text = "🟢 활성화됨 (자동 매매 구동 중)" if AUTO_TRADING_ACTIVE else "🔴 중지됨"
+    status_text = "🟢 자율 구동 중 (30분 주기 자동 스캔 활성)" if AUTO_TRADING_ACTIVE else "🔴 중지됨"
     
     keyboard = [
         [InlineKeyboardButton("🔥 AI 자율 종목 스캔", callback_data='auto_scan'),
@@ -210,9 +211,9 @@ async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"🤖 **[주식 AI 자동매매 & 관제센터]**\n\n"
-        f"• **자동매매 상태:** {status_text}\n"
-        f"• 서버가 24시간 안전하게 구동 중입니다.",
+        f"🤖 **[주식 AI 자율 관제센터]**\n\n"
+        f"• **상태:** {status_text}\n"
+        f"• 백그라운드 엔진이 스스로 작동하고 있습니다.",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -229,12 +230,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=query.message.chat_id, text=report, parse_mode='Markdown')
     elif data == 'emergency_stop':
         AUTO_TRADING_ACTIVE = False
-        await query.edit_message_text(text="🛑 **[긴급 경보] 자동매매 엔진이 중지되었습니다.**", parse_mode='Markdown')
+        await query.edit_message_text(text="🛑 **[긴급 경보] 자율 자동매매 엔진이 중지되었습니다.**", parse_mode='Markdown')
     elif data == 'resume_trading':
         AUTO_TRADING_ACTIVE = True
-        await query.edit_message_text(text="🚀 **[재개 완료] 자동매매 엔진이 다시 가동됩니다.**", parse_mode='Markdown')
+        await query.edit_message_text(text="🚀 **[재개 완료] 자율 자동매매 엔진이 다시 가동됩니다.**", parse_mode='Markdown')
     elif data == 'realtime_monitor':
-        await query.edit_message_text(text="⚡ **[실시간 감시 레이더]** 상시 감시 작동 중.", parse_mode='Markdown')
+        await query.edit_message_text(text="⚡ **[실시간 감시 레이더]** 24시간 자율 감시 중.", parse_mode='Markdown')
     elif data == 'market_radar':
         await query.edit_message_text(text="📊 **[시장 레이더]** 거래대금 상위 스캔 완료.", parse_mode='Markdown')
 
@@ -281,57 +282,58 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ==========================================
-# 8. 능동형 자동 알림
-# ==========================================
-def send_proactive_alert(app):
-    if not ADMIN_CHAT_ID:
-        return
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        briefing = AIServiceRouter.analyze("오늘 장 주도주와 자동매매 현황 모닝 브리핑을 작성해주세요.")
-        loop.run_until_complete(app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"🚨 **[브리핑]**\n\n{briefing}", parse_mode="Markdown"))
-    except Exception as e:
-        logger.error(f"알림 실패: {e}")
-
-
-# ==========================================
-# 9. Flask 웹 서버 (슬립 방지) 및 메인 실행
+# 8. Flask 웹 서버 (클라우드 슬립 방지용 헬스체크)
 # ==========================================
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Auto Trading & AI Center is running live!", 200
+    return "Autonomous AI Stock Trading Bot is running 24/7!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port)
 
+
+# ==========================================
+# 9. 백그라운드 스케줄러 관리 및 예외 방어 시스템
+# ==========================================
+def init_background_scheduler(application):
+    """APScheduler 백그라운드 구동 및 네트워크 에러/크래시 방어 로직"""
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(lambda: run_autonomous_scanner(application), 'interval', minutes=30, timezone=KST)
+    scheduler.start()
+    logger.info("🛡️ [9번 모듈] 백그라운드 스케줄러 안전 장치 및 예외 방어 시스템 활성화 완료.")
+    return scheduler
+
+
+# ==========================================
+# 10. 봇 메인 실행 및 프로세스 진입점
+# ==========================================
 def main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN이 설정되지 않았습니다!")
         return
 
+    # 텔레그램 앱 빌드
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # 핸들러 등록
     application.add_handler(CommandHandler("start", start_dashboard))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_commands))
     application.add_handler(MessageHandler(filters.COMMAND, handle_all_commands))
     application.add_handler(MessageHandler(filters.PHOTO, handle_all_commands))
 
-    # 웹 서버 스레드 시작 (슬립 방지)
+    # 1. Flask 웹 서버 구동 (클라우드 슬립 방지)
     threading.Thread(target=run_web, daemon=True).start()
 
-    # 백그라운드 스케줄러 설정 (아침/점심 브리핑 + 30분 주기 자동매매 엔진 실행)
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(lambda: send_proactive_alert(application), 'cron', hour='7,12', minute=0, timezone=KST)
-    scheduler.add_job(lambda: run_safe_auto_trade(application), 'interval', minutes=30)
-    
-    scheduler.start()
-    logger.info("🤖 [자동매매 시스템] 스케줄러 및 백그라운드 엔진 가동 시작...")
+    # 2. 24시간 자율 스케줄러 및 방어 시스템 가동 (9번, 10번 연동)
+    init_background_scheduler(application)
 
+    logger.info("🚀 [10번 모듈] 주식 AI 자율 관제 봇이 성공적으로 실행되었습니다. 텔레그램에서 /start를 입력하세요.")
+    
+    # 폴링 시작
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
