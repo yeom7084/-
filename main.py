@@ -47,88 +47,17 @@ ADMIN_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions")
 
 # 자동매매 전역 상태 관리
-AUTO_TRADING_ACTIVE = True  # 기본적으로 자동매매 활성화
+AUTO_TRADING_ACTIVE = True
 
 
 # ==========================================
-# 3. [핵심] 자동매매 엔진 (실행 및 주문 집행 루프)
-# ==========================================
-async def execute_auto_trade_logic(bot):
-    """
-    백그라운드에서 주기적으로 돌며 AI 자율 스캔 + 매수/매도 조건을 판단하고 
-    조건 만족 시 자동으로 주문을 집행한 뒤 텔레그램으로 알려주는 핵심 엔진
-    """
-    global AUTO_TRADING_ACTIVE
-    if not AUTO_TRADING_ACTIVE:
-        return
-    
-    if not ADMIN_CHAT_ID:
-        return
-
-    logger.info("🤖 [자동매매 엔진] 주기적 시장 스캔 및 매매 조건 검사 중...")
-    try:
-        # 1. AI에게 현재 유망한 종목 자율 스캔 요청
-        prompt = "현재 한국 주식 시장에서 거래대금이 급증하고 기술적 반등이 나오는 종목 1개를 골라 매수 가능 여부(매수가, 목표가, 손절가)를 JSON 형태로 간결하게 알려줘."
-        analysis_result = AIServiceRouter.analyze(prompt)
-        
-        # 2. 자동매매 시뮬레이션 또는 증권사 API 연동 주문 집행 지점
-        # (실제 증권사 API 연동 시 이곳에 키움/한국투자증권 API 주문 함수를 삽입합니다)
-        trade_execution_msg = (
-            "🤖 **[자동매매 엔진 매매 집행 리포트]**\n\n"
-            f"{analysis_result}\n\n"
-            "🟢 **상태:** 자동매매 조건 충족 종목 포착 및 가상 주문 완료 (실전 전환 대기 중)"
-        )
-        
-        # 3. 관리자 텔레그램으로 자동매매 결과 실시간 전송
-        await bot.send_message(chat_id=ADMIN_CHAT_ID, text=trade_execution_msg, parse_mode="Markdown")
-        logger.info("🤖 [자동매매 엔진] 매매 집행 결과 전송 완료")
-    except Exception as e:
-        logger.error(f"자동매매 엔진 실행 중 오류 발생: {e}")
-
-
-# ==========================================
-# 4. 모든 종목 자동 검색 해결사
-# ==========================================
-class QuickStockResolver:
-    POPULAR_STOCKS = {
-        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "삼성SDI": "006400.KS",
-        "에코프로": "086520.KQ", "에코프로비엠": "247540.KS", "셀트리온": "068270.KS",
-        "LG에너지솔루션": "373220.KS", "현대차": "005380.KS", "기아": "000270.KS",
-        "애플": "AAPL", "테슬라": "TSLA", "엔비디아": "NVDA", "마이크로소프트": "MSFT"
-    }
-
-    @classmethod
-    def resolve(cls, query: str) -> tuple:
-        if not query:
-            return "005930.KS", "삼성전자"
-        q = query.strip()
-        if q in cls.POPULAR_STOCKS:
-            return cls.POPULAR_STOCKS[q], q
-        if "." in q or (q.isalpha() and len(q) <= 5):
-            return q.upper(), q
-        if q.isdigit() and len(q) == 6:
-            for suffix in [".KS", ".KQ"]:
-                test_t = q + suffix
-                try:
-                    df = yf.download(test_t, period="2d", progress=False)
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.droplevel(1)
-                    if not df.empty:
-                        return test_t, q
-                except:
-                    continue
-            return q + ".KS", q
-        return q.upper() + ".KS", q
-
-
-# ==========================================
-# 5. AI 서비스 라우터
+# 3. AI 서비스 라우터 (Groq / Gemini 연동)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
     def call_groq(prompt: str) -> str:
         if not GROQ_API_KEY:
-            raise Exception("GROQ_API_KEY가 설정되지 않았습니다.")
+            raise Exception("GROQ_API_KEY 미설정")
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GROQ_API_KEY}"}
         payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
         req = urllib.request.Request(GROQ_BASE_URL, data=json.dumps(payload).encode('utf-8'), headers=headers, method="POST")
@@ -162,6 +91,69 @@ class AIServiceRouter:
             except Exception as ge:
                 logger.warning(f"Gemini 실패: {ge}")
         return "💡 기본 분석 모드: AI API 키를 확인해주세요."
+
+
+# ==========================================
+# 4. 자동매매 엔진 (백그라운드 주문 집행 및 스캔)
+# ==========================================
+def run_safe_auto_trade(app):
+    global AUTO_TRADING_ACTIVE
+    if not AUTO_TRADING_ACTIVE or not ADMIN_CHAT_ID:
+        return
+
+    logger.info("🤖 [자동매매 엔진] 주기적 시장 스캔 및 조건 검사 중...")
+    try:
+        prompt = "현재 한국 주식 시장에서 거래대금이 급증하고 기술적 반등이 나오는 종목 1개를 골라 매수가, 목표가, 손절가를 간결하게 알려줘."
+        analysis_result = AIServiceRouter.analyze(prompt)
+        
+        trade_execution_msg = (
+            "🤖 **[자동매매 엔진 매매 집행 리포트]**\n\n"
+            f"{analysis_result}\n\n"
+            "🟢 **상태:** 자동매매 조건 충족 종목 포착 및 가상 주문 완료"
+        )
+        
+        async def send_msg():
+            await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=trade_execution_msg, parse_mode="Markdown")
+            
+        asyncio.run(send_msg())
+        logger.info("🤖 [자동매매 엔진] 매매 집행 결과 전송 완료")
+    except Exception as e:
+        logger.error(f"자동매매 엔진 실행 중 오류 발생 (봇 유지): {e}")
+
+
+# ==========================================
+# 5. 종목 자동 탐색기
+# ==========================================
+class QuickStockResolver:
+    POPULAR_STOCKS = {
+        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "삼성SDI": "006400.KS",
+        "에코프로": "086520.KQ", "에코프로비엠": "247540.KS", "셀트리온": "068270.KS",
+        "LG에너지솔루션": "373220.KS", "현대차": "005380.KS", "기아": "000270.KS",
+        "애플": "AAPL", "테슬라": "TSLA", "엔비디아": "NVDA", "마이크로소프트": "MSFT"
+    }
+
+    @classmethod
+    def resolve(cls, query: str) -> tuple:
+        if not query:
+            return "005930.KS", "삼성전자"
+        q = query.strip()
+        if q in cls.POPULAR_STOCKS:
+            return cls.POPULAR_STOCKS[q], q
+        if "." in q or (q.isalpha() and len(q) <= 5):
+            return q.upper(), q
+        if q.isdigit() and len(q) == 6:
+            for suffix in [".KS", ".KQ"]:
+                test_t = q + suffix
+                try:
+                    df = yf.download(test_t, period="2d", progress=False)
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.droplevel(1)
+                    if not df.empty:
+                        return test_t, q
+                except:
+                    continue
+            return q + ".KS", q
+        return q.upper() + ".KS", q
 
 
 # ==========================================
@@ -202,7 +194,7 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
 
 
 # ==========================================
-# 7. 텔레그램 리모컨 대시보드
+# 7. 텔레그램 리모컨 및 명령어 핸들러
 # ==========================================
 async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO_TRADING_ACTIVE
@@ -210,19 +202,17 @@ async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [InlineKeyboardButton("🔥 AI 자율 종목 스캔", callback_data='auto_scan'),
-         InlineKeyboardButton("🚨 실시간 이상징후 감시", callback_data='realtime_monitor')],
-        [InlineKeyboardButton("🛑 자동매매 긴급 중지", callback_data='emergency_stop'),
+         InlineKeyboardButton("🚨 실시간 이상징후", callback_data='realtime_monitor')],
+        [InlineKeyboardButton("🛑 자동매매 중지", callback_data='emergency_stop'),
          InlineKeyboardButton("🚀 자동매매 재개", callback_data='resume_trading')],
-        [InlineKeyboardButton("📊 시장 레이더", callback_data='market_radar'),
-         InlineKeyboardButton("📚 명령어 가이드", callback_data='show_help')]
+        [InlineKeyboardButton("📊 시장 레이더", callback_data='market_radar')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
         f"🤖 **[주식 AI 자동매매 & 관제센터]**\n\n"
         f"• **자동매매 상태:** {status_text}\n"
-        f"• 백그라운드 엔진이 주기적으로 시장을 스캔하고 매매를 집행합니다.\n\n"
-        "버튼을 누르거나 명령어를 입력하세요.",
+        f"• 서버가 24시간 안전하게 구동 중입니다.",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -234,26 +224,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     if data == 'auto_scan':
-        await query.edit_message_text(text="🔍 **[AI 자율 종목 스캔 실행 중]**\n시장을 스캔하여 유망 종목을 발굴하고 있습니다...", parse_mode='Markdown')
+        await query.edit_message_text(text="🔍 **[AI 자율 종목 스캔 실행 중]**...", parse_mode='Markdown')
         report = AIServiceRouter.analyze("현재 한국 주식 시장에서 수급이 유입되는 유망 종목 1가지를 자율 발굴하여 분석해주세요.")
         await context.bot.send_message(chat_id=query.message.chat_id, text=report, parse_mode='Markdown')
     elif data == 'emergency_stop':
         AUTO_TRADING_ACTIVE = False
-        await query.edit_message_text(text="🛑 **[긴급 경보] 자동매매 엔진이 안전하게 중지되었습니다!**", parse_mode='Markdown')
+        await query.edit_message_text(text="🛑 **[긴급 경보] 자동매매 엔진이 중지되었습니다.**", parse_mode='Markdown')
     elif data == 'resume_trading':
         AUTO_TRADING_ACTIVE = True
-        await query.edit_message_text(text="🚀 **[재개 완료] 자동매매 엔진이 다시 가동을 시작했습니다!**", parse_mode='Markdown')
+        await query.edit_message_text(text="🚀 **[재개 완료] 자동매매 엔진이 다시 가동됩니다.**", parse_mode='Markdown')
     elif data == 'realtime_monitor':
-        await query.edit_message_text(text="⚡ **[실시간 감시 레이더]** 거래량 폭증 종목 상시 감시 중.", parse_mode='Markdown')
+        await query.edit_message_text(text="⚡ **[실시간 감시 레이더]** 상시 감시 작동 중.", parse_mode='Markdown')
     elif data == 'market_radar':
-        await query.edit_message_text(text="📊 **[시장 레이더]** 거래대금 상위 및 외인/기관 순매수 스캔 완료.", parse_mode='Markdown')
-    elif data == 'show_help':
-        await query.edit_message_text("📖 `!추세`, `!차트`, `!손절가 [종목]`, `!투자검사 [종목]` 명령어를 사용할 수 있습니다.", parse_mode='Markdown')
+        await query.edit_message_text(text="📊 **[시장 레이더]** 거래대금 상위 스캔 완료.", parse_mode='Markdown')
 
-
-# ==========================================
-# 8. 명령어 핸들러
-# ==========================================
 async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -281,7 +265,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
             img_bytes, cp = await asyncio.to_thread(generate_chart, df, f"{name} ({ticker})")
-            report = await asyncio.to_thread(AIServiceRouter.analyze, f"종목: {name}({ticker}), 현재가: {cp}원. 추세와 전망 분석.", img_bytes)
+            report = await asyncio.to_thread(AIServiceRouter.analyze, f"종목: {name}({ticker}), 현재가: {cp}원. 추세와 전망 분석.")
             await update.message.reply_photo(photo=img_bytes, caption=f"📊 [{name}] 차트 분석")
             await update.message.reply_text(report, parse_mode="Markdown")
         except Exception as e:
@@ -297,7 +281,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ==========================================
-# 9. 능동형 자동 알림 및 스케줄러
+# 8. 능동형 자동 알림
 # ==========================================
 def send_proactive_alert(app):
     if not ADMIN_CHAT_ID:
@@ -306,13 +290,13 @@ def send_proactive_alert(app):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         briefing = AIServiceRouter.analyze("오늘 장 주도주와 자동매매 현황 모닝 브리핑을 작성해주세요.")
-        loop.run_until_complete(app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"🚨 **[모닝/점심 브리핑]**\n\n{briefing}", parse_mode="Markdown"))
+        loop.run_until_complete(app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"🚨 **[브리핑]**\n\n{briefing}", parse_mode="Markdown"))
     except Exception as e:
         logger.error(f"알림 실패: {e}")
 
 
 # ==========================================
-# 10. Flask 웹 서버 및 메인 구동
+# 9. Flask 웹 서버 (슬립 방지) 및 메인 실행
 # ==========================================
 web_app = Flask(__name__)
 
@@ -337,15 +321,13 @@ def main():
     application.add_handler(MessageHandler(filters.COMMAND, handle_all_commands))
     application.add_handler(MessageHandler(filters.PHOTO, handle_all_commands))
 
-    # 웹 서버 스레드 시작
+    # 웹 서버 스레드 시작 (슬립 방지)
     threading.Thread(target=run_web, daemon=True).start()
 
-    # 백그라운드 스케줄러 설정 (아침 7시/낮 12시 브리핑 + 30분마다 자동매매 실행 루프)
+    # 백그라운드 스케줄러 설정 (아침/점심 브리핑 + 30분 주기 자동매매 엔진 실행)
     scheduler = BackgroundScheduler()
     scheduler.add_job(lambda: send_proactive_alert(application), 'cron', hour='7,12', minute=0, timezone=KST)
-    
-    # 💡 [핵심 자동매매 주기 설정] 예: 30분마다 자동으로 execute_auto_trade_logic 함수 실행
-    scheduler.add_job(lambda: asyncio.run(execute_auto_trade_logic(application.bot)), 'interval', minutes=30)
+    scheduler.add_job(lambda: run_safe_auto_trade(application), 'interval', minutes=30)
     
     scheduler.start()
     logger.info("🤖 [자동매매 시스템] 스케줄러 및 백그라운드 엔진 가동 시작...")
