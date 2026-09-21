@@ -38,15 +38,14 @@ else:
     plt.rc('font', family='NanumGothic')
 plt.rcParams['axes.unicode_minus'] = False
 
-# 2. API 토큰 및 설정
+# 2. API 토큰 및 환경 변수 설정
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
-GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 ADMIN_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions")
 
-# 자동매매 전역 상태 관리
 AUTO_TRADING_ACTIVE = True
 
 
@@ -58,25 +57,43 @@ class AIServiceRouter:
     def call_groq(prompt: str) -> str:
         if not GROQ_API_KEY:
             raise Exception("GROQ_API_KEY 미설정")
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GROQ_API_KEY}"}
-        payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
-        req = urllib.request.Request(GROQ_BASE_URL, data=json.dumps(payload).encode('utf-8'), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            content = res_data['choices'][0]['message']['content']
-            if content:
-                return f"⚡ **[Groq AI 자율 분석]**\n\n" + content
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {GROQ_API_KEY}"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2
+        }
+        req = urllib.request.Request(
+            GROQ_BASE_URL,
+            data=json.dumps(payload).encode('utf-8'),
+            headers=headers,
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+                content = res_data['choices'][0]['message']['content']
+                if content:
+                    return f"⚡ **[Groq AI 자율 분석]**\n\n" + content
+        except Exception as e:
+            logger.error(f"Groq API 호출 세부 에러: {e}")
+            raise e
         raise Exception("Groq 응답 비어 있음")
 
     @staticmethod
     def analyze(prompt: str, image_bytes: bytes = None) -> str:
         sys_instruction = "당신은 주식 시장을 24시간 감시하며 자율적으로 매매 기회를 포착하는 AI 관제 시스템입니다. 핵심만 냉철하게 분석해주세요.\n\n"
         full_prompt = sys_instruction + prompt
+        
         if GROQ_API_KEY and not image_bytes:
             try:
                 return AIServiceRouter.call_groq(full_prompt)
             except Exception as e:
-                logger.warning(f"Groq 실패, Gemini 전환: {e}")
+                logger.warning(f"Groq 실패, Gemini로 전환: {e}")
+                
         if GEMINI_API_KEY:
             try:
                 import google.generativeai as genai
@@ -89,15 +106,15 @@ class AIServiceRouter:
                 if response and response.text:
                     return f"✨ **[Gemini AI 자율 분석]**\n\n" + response.text
             except Exception as ge:
-                logger.warning(f"Gemini 실패: {ge}")
-        return "💡 **[AI API 설정 오류]** 환경 변수에 GROQ_API_KEY 또는 GEMINI_API_KEY가 올바르게 입력되었는지 확인해주세요."
+                logger.error(f"Gemini API 호출 에러: {ge}")
+                
+        return f"💡 **[AI API 설정 오류]** GROQ_API_KEY 또는 GEMINI_API_KEY 환경 변수를 확인해주세요."
 
 
 # ==========================================
 # 4. 24시간 스스로 작동하는 자율 스캔 엔진
 # ==========================================
 def run_autonomous_scanner(app):
-    """사람이 명령을 내리지 않아도 백그라운드에서 주기적으로 혼자 돌아가는 자율 매매 엔진"""
     global AUTO_TRADING_ACTIVE
     if not AUTO_TRADING_ACTIVE or not ADMIN_CHAT_ID:
         return
@@ -110,16 +127,15 @@ def run_autonomous_scanner(app):
         report_msg = (
             "🤖 **[자동매매 자율 관제 리포트]**\n\n"
             f"{analysis_result}\n\n"
-            "🟢 **엔진 상태:** 백그라운드 자율 스캔 및 가상 모니터링 완료"
+            "🟢 **엔진 상태:** 백그라운드 자율 스캔 완료"
         )
         
         async def push_to_telegram():
             await app.bot.send_message(chat_id=ADMIN_CHAT_ID, text=report_msg, parse_mode="Markdown")
             
         asyncio.run(push_to_telegram())
-        logger.info("🤖 [자율 엔진] 텔레그램 자동 전송 완료")
     except Exception as e:
-        logger.error(f"자율 엔진 구동 중 에러 발생 (봇은 꺼지지 않음): {e}")
+        logger.error(f"자율 엔진 에러: {e}")
 
 
 # ==========================================
@@ -195,7 +211,7 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
 
 
 # ==========================================
-# 7. 텔레그램 리모컨 및 명령어 핸들러
+# 7. 대시보드 및 명령어 핸들러 (!help 버그 수정본)
 # ==========================================
 async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO_TRADING_ACTIVE
@@ -212,8 +228,11 @@ async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"🤖 **[주식 AI 자율 관제센터]**\n\n"
-        f"• **상태:** {status_text}\n"
-        f"• 백그라운드 엔진이 스스로 작동하고 있습니다.",
+        f"• **상태:** {status_text}\n\n"
+        f"💡 **사용 가능한 명령어:**\n"
+        f"- `!help` 또는 `/start`: 대시보드 열기\n"
+        f"- `!차트 [종목명/티커]`: 기술적 분석 및 차트 출력\n"
+        f"- `!손절가 [종목명/티커]`: 리스크 분석",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -240,17 +259,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text="📊 **[시장 레이더]** 거래대금 상위 스캔 완료.", parse_mode='Markdown')
 
 async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-    if update.message.photo:
-        await update.message.reply_text("📸 차트 이미지 분석 중...")
+    if not update.message or not update.message.text:
         return
 
     text = update.message.text.strip()
-    if text in ["/start", "!start", "!스타트"]:
+    text_lower = text.lower()
+    
+    # 1. !help, /help, !start 등 도움말/시작 명령어는 무조건 대시보드를 띄우도록 최우선 처리
+    if text_lower in ["/start", "!start", "!스타트", "!help", "/help", "help", "도움말"]:
         await start_dashboard(update, context)
         return
 
+    # 2. 느낌표(!)나 슬래시(/)로 시작하지 않는 일반 텍스트는 무시
     if not text.startswith("!") and not text.startswith("/"):
         return
 
@@ -282,7 +302,7 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ==========================================
-# 8. Flask 웹 서버 (클라우드 슬립 방지용 헬스체크)
+# 8. Flask 웹 서버 (클라우드 슬립 방지용)
 # ==========================================
 web_app = Flask(__name__)
 
@@ -296,14 +316,13 @@ def run_web():
 
 
 # ==========================================
-# 9. 백그라운드 스케줄러 관리 및 예외 방어 시스템
+# 9. 백그라운드 스케줄러 관리
 # ==========================================
 def init_background_scheduler(application):
-    """APScheduler 백그라운드 구동 및 네트워크 에러/크래시 방어 로직"""
     scheduler = BackgroundScheduler()
     scheduler.add_job(lambda: run_autonomous_scanner(application), 'interval', minutes=30, timezone=KST)
     scheduler.start()
-    logger.info("🛡️ [9번 모듈] 백그라운드 스케줄러 안전 장치 및 예외 방어 시스템 활성화 완료.")
+    logger.info("🛡️ [백그라운드 스케줄러] 활성화 완료.")
     return scheduler
 
 
@@ -315,25 +334,24 @@ def main():
         logger.error("❌ TELEGRAM_BOT_TOKEN이 설정되지 않았습니다!")
         return
 
-    # 텔레그램 앱 빌드
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # 핸들러 등록
+    # 핸들러 등록 (모든 텍스트 메시지를 통합 핸들러로 수용하여 명령어 누락 원천 차단)
     application.add_handler(CommandHandler("start", start_dashboard))
+    application.add_handler(CommandHandler("help", start_dashboard))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_all_commands))
     application.add_handler(MessageHandler(filters.COMMAND, handle_all_commands))
     application.add_handler(MessageHandler(filters.PHOTO, handle_all_commands))
 
-    # 1. Flask 웹 서버 구동 (클라우드 슬립 방지)
+    # 웹 서버 구동
     threading.Thread(target=run_web, daemon=True).start()
 
-    # 2. 24시간 자율 스케줄러 및 방어 시스템 가동 (9번, 10번 연동)
+    # 스케줄러 가동
     init_background_scheduler(application)
 
-    logger.info("🚀 [10번 모듈] 주식 AI 자율 관제 봇이 성공적으로 실행되었습니다. 텔레그램에서 /start를 입력하세요.")
+    logger.info("🚀 주식 AI 자율 관제 봇 실행 완료. 텔레그램에서 !help를 입력해 보세요.")
     
-    # 폴링 시작
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
