@@ -7,3 +7,4 @@ matplotlib
 python-telegram-bot
 google-generativeai
 openai
+apscheduler
