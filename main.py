@@ -88,7 +88,7 @@ class AIServiceRouter:
                     return f"✨ **[Gemini AI 자율 분석]**\n\n" + response.text
             except Exception as ge:
                 logger.error(f"Gemini 에러: {ge}")
-        return f"💡 **[AI API 설정 오류]** API 키를 확인해주세요."
+        raise Exception("GROQ_API_KEY 또는 GEMINI_API_KEY가 올바르게 설정되지 않았습니다.")
 
 
 # ==========================================
@@ -184,7 +184,7 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
 
 
 # ==========================================
-# 7. 대시보드 및 20개 명령어 통합 핸들러
+# 7. 대시보드 및 버튼/명령어 핸들러 (수정 완료)
 # ==========================================
 async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global AUTO_TRADING_ACTIVE
@@ -232,20 +232,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     
-    if data == 'auto_scan':
-        await query.edit_message_text(text="🔍 **[AI 자율 종목 스캔 실행 중]**...", parse_mode='Markdown')
-        report = AIServiceRouter.analyze("현재 한국 주식 시장에서 수급이 유입되는 유망 종목 1가지를 자율 발굴하여 분석해주세요.")
+    if data == 'auto_scan' or data == 'market_radar':
+        await query.edit_message_text(text="🔍 **[AI 시장 레이더 및 종목 스캔 실행 중]** 잠시만 기다려주세요...", parse_mode='Markdown')
+        try:
+            report = AIServiceRouter.analyze("현재 한국 주식 시장에서 거래대금이 폭증하고 수급이 집중되는 유망 종목 및 시장 동향을 분석해주세요.")
+        except Exception as e:
+            report = f"⚠️ **[AI 분석 실패]**\n원인: {e}\n\n서버 환경 변수(GROQ_API_KEY / GEMINI_API_KEY)를 확인해주세요."
         await context.bot.send_message(chat_id=query.message.chat_id, text=report, parse_mode='Markdown')
+        
+    elif data == 'realtime_monitor':
+        await query.edit_message_text(text="⚡ **[실시간 감시 레이더 작동 중]** 잠시만 기다려주세요...", parse_mode='Markdown')
+        try:
+            report = AIServiceRouter.analyze("현재 시장의 변동성과 주요 종목들의 실시간 이상 징후를 분석해주세요.")
+        except Exception as e:
+            report = f"⚠️ **[감시 레이더 실패]**\n원인: {e}"
+        await context.bot.send_message(chat_id=query.message.chat_id, text=report, parse_mode='Markdown')
+        
     elif data == 'emergency_stop':
         AUTO_TRADING_ACTIVE = False
         await query.edit_message_text(text="🛑 **[긴급 경보] 자율 자동매매 엔진이 중지되었습니다.**", parse_mode='Markdown')
+        
     elif data == 'resume_trading':
         AUTO_TRADING_ACTIVE = True
         await query.edit_message_text(text="🚀 **[재개 완료] 자율 자동매매 엔진이 다시 가동됩니다.**", parse_mode='Markdown')
-    elif data == 'realtime_monitor':
-        await query.edit_message_text(text="⚡ **[실시간 감시 레이더]** 24시간 자율 감시 중.", parse_mode='Markdown')
-    elif data == 'market_radar':
-        await query.edit_message_text(text="📊 **[시장 레이더]** 거래대금 상위 스캔 완료.", parse_mode='Markdown')
 
 async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -254,7 +263,6 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = update.message.text.strip()
     text_lower = text.lower()
     
-    # 명령어 1, 20 처리
     if text_lower in ["/start", "!start", "!스타트", "!help", "/help", "help", "도움말"]:
         await start_dashboard(update, context)
         return
@@ -266,7 +274,6 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
     cmd = parts[0].replace("!", "").replace("/", "").lower()
     arg = parts[1] if len(parts) > 1 else ""
 
-    # 2. 차트
     if cmd in ["차트", "그래프"]:
         ticker, name = QuickStockResolver.resolve(arg if arg else "삼성전자")
         await update.message.reply_text(f"📊 [{name}] 데이터 분석 및 차트 생성 중...")
@@ -282,35 +289,30 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"⚠️ 오류 발생: {e}")
         return
 
-    # 3. 추세
     elif cmd in ["추세"]:
         ticker, name = QuickStockResolver.resolve(arg)
         report = AIServiceRouter.analyze(f"종목 {name}({ticker})의 단기 및 장기 주가 추세 분석을 수행해주세요.")
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # 4. 손절가
     elif cmd in ["손절가"]:
         ticker, name = QuickStockResolver.resolve(arg)
         report = AIServiceRouter.analyze(f"종목 {name}({ticker})의 리스크 관리 및 권장 손절가를 분석해주세요.")
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # 5. 매수가
     elif cmd in ["매수가", "진입가"]:
         ticker, name = QuickStockResolver.resolve(arg)
         report = AIServiceRouter.analyze(f"종목 {name}({ticker})의 최적 매수 타점 및 분할 매수 전략을 분석해주세요.")
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # 6. 목표가
     elif cmd in ["목표가", "익절가"]:
         ticker, name = QuickStockResolver.resolve(arg)
         report = AIServiceRouter.analyze(f"종목 {name}({ticker})의 단기/중기 목표 주가(익절가)를 분석해주세요.")
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # 7. 시세
     elif cmd in ["시세", "현재가"]:
         ticker, name = QuickStockResolver.resolve(arg)
         try:
@@ -326,75 +328,62 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"⚠️ 시세 조회 실패: {e}")
         return
 
-    # 8. 잔고
     elif cmd in ["잔고", "계좌"]:
-        await update.message.reply_text("💼 **[가상 계좌 잔고]**\n-예수금: 10,000,000원\n-총평가금액: 10,000,000원\n-수익률: 0.00%", parse_mode="Markdown")
+        await update.message.reply_text("💼 **[가상 계좌 잔고]**\n- 예수금: 10,000,000원\n- 총평가금액: 10,000,000원\n- 수익률: 0.00%", parse_mode="Markdown")
         return
 
-    # 9. 수익률
     elif cmd in ["수익률", "성적"]:
         await update.message.reply_text("📊 **[매매 성적표]**\n- 오늘 승률: 100%\n- 누적 실현 손익: +0원", parse_mode="Markdown")
         return
 
-    # 10. 스캔
     elif cmd in ["스캔", "발굴"]:
         await update.message.reply_text("🔍 시장 주도주 및 거래대금 상위 종목 스캔 중...")
         report = AIServiceRouter.analyze("현재 코스피/코스닥 시장에서 가장 핫한 주도 테마와 종목을 분석해줘.")
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # 11. 뉴스
     elif cmd in ["뉴스", "속보"]:
         report = AIServiceRouter.analyze(f"최근 국내 주식 시장 이슈와 관련 뉴스 요약을 제공해주세요. 검색어: {arg}")
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # 12. 모니터
     elif cmd in ["모니터", "감시"]:
         await update.message.reply_text("⚡ 실시간 이상 수급 및 변동성 감시 시스템이 정상 작동 중입니다.", parse_mode="Markdown")
         return
 
-    # 13. 설정
     elif cmd in ["설정", "config"]:
         await update.message.reply_text(f"⚙️ **[봇 환경 설정]**\n- Groq API 연동: {'활성화' if GROQ_API_KEY else '비활성화'}\n- Gemini API 연동: {'활성화' if GEMINI_API_KEY else '비활성화'}", parse_mode="Markdown")
         return
 
-    # 14. 상태
     elif cmd in ["상태", "status"]:
         global AUTO_TRADING_ACTIVE
         st = "🟢 정상 구동 중" if AUTO_TRADING_ACTIVE else "🔴 중지됨"
         await update.message.reply_text(f"🖥️ **[시스템 상태]**\n- 엔진 상태: {st}\n- 스케줄러: 30분 주기 자동 스캔 활성", parse_mode="Markdown")
         return
 
-    # 15. 시작
     elif cmd in ["시작", "재개"]:
         AUTO_TRADING_ACTIVE = True
         await update.message.reply_text("🚀 자동매매 자율 엔진이 재개되었습니다.", parse_mode="Markdown")
         return
 
-    # 16. 중지
     elif cmd in ["중지", "정지"]:
         AUTO_TRADING_ACTIVE = False
         await update.message.reply_text("🛑 자동매매 자율 엔진이 긴급 중지되었습니다.", parse_mode="Markdown")
         return
 
-    # 17. 로그
     elif cmd in ["로그", "log"]:
         await update.message.reply_text("📝 **[시스템 로그 요약]**\n- 최근 에러 없음\n- API 통신 상태 원활", parse_mode="Markdown")
         return
 
-    # 18. 환율
     elif cmd in ["환율", "거시경제"]:
         report = AIServiceRouter.analyze("현재 원달러 환율과 미국 증시 마감 상황이 국내 증시에 미치는 영향을 분석해줘.")
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # 19. 초기화
     elif cmd in ["초기화", "리셋"]:
         await update.message.reply_text("🧹 시스템 캐시 및 임시 데이터를 초기화했습니다.", parse_mode="Markdown")
         return
 
-    # 20. 정보
     elif cmd in ["정보", "info"]:
         await update.message.reply_text("🤖 **AI Stock Autonomous Bot v2.0**\n- 24시간 자율 관제 및 20가지 명령어 지원 시스템", parse_mode="Markdown")
         return
@@ -445,7 +434,7 @@ def main():
     threading.Thread(target=run_web, daemon=True).start()
     init_background_scheduler(application)
 
-    logger.info("🚀 20개 명령어가 완벽하게 탑재된 주식 관제 봇이 실행되었습니다.")
+    logger.info("🚀 20개 명령어 및 버튼 연동 관제 봇이 실행되었습니다.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
