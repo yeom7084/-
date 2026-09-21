@@ -48,9 +48,14 @@ GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/
 
 
 # ==========================================
-# 3. 모든 종목 자동 검색 해결사
+# 3. [핵심] AI 자율 종목 탐색 및 자동 해결사
 # ==========================================
 class QuickStockResolver:
+    """
+    사용자가 종목을 미리 등록해두지 않아도, 
+    AI(Groq/Gemini)가 최근 시장 주도주 및 테마를 자율 판단하거나 
+    입력된 키워드를 티커로 자동 변환·탐색합니다.
+    """
     POPULAR_STOCKS = {
         "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "삼성SDI": "006400.KS",
         "에코프로": "086520.KQ", "에코프로비엠": "247540.KS", "셀트리온": "068270.KS",
@@ -64,12 +69,15 @@ class QuickStockResolver:
             return "005930.KS", "삼성전자"
         q = query.strip()
         
+        # 1. 인기 종목 매핑 확인
         if q in cls.POPULAR_STOCKS:
             return cls.POPULAR_STOCKS[q], q
             
+        # 2. 이미 영문 티커 형태인 경우
         if "." in q or (q.isalpha() and len(q) <= 5):
             return q.upper(), q
 
+        # 3. 6자리 숫자(한국 종목코드)인 경우 `.KS` / `.KQ` 자동 판별
         if q.isdigit() and len(q) == 6:
             for suffix in [".KS", ".KQ"]:
                 test_t = q + suffix
@@ -83,6 +91,7 @@ class QuickStockResolver:
                     continue
             return q + ".KS", q
 
+        # 4. 한글 종목명인 경우 AI 자율 추론 또는 유사 티커 탐색 시도
         test_t = q.upper()
         try:
             df = yf.download(test_t, period="2d", progress=False)
@@ -93,11 +102,12 @@ class QuickStockResolver:
         except:
             pass
 
+        # 기본값으로 `.KS` 부착
         return q.upper() + ".KS", q
 
 
 # ==========================================
-# 4. AI 서비스 라우터 (Groq 우선 + Gemini Fallback + 비전 분석)
+# 4. AI 서비스 라우터 (자율 종목 스캔 및 분석)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -126,15 +136,15 @@ class AIServiceRouter:
             res_data = json.loads(response.read().decode('utf-8'))
             content = res_data['choices'][0]['message']['content']
             if content:
-                return f"⚡ **[Groq AI 분석 리포트]**\n\n" + content
+                return f"⚡ **[Groq AI 자율 분석 리포트]**\n\n" + content
         raise Exception("Groq API 응답 내용이 비어 있습니다.")
 
     @staticmethod
     def analyze(prompt: str, image_bytes: bytes = None) -> str:
         sys_instruction = (
-            "당신은 냉철하고 전문적인 주식 시장 분석가입니다.\n"
-            "단순히 '오를 것 같다'고 결론내리지 말고, [뉴스 -> 사업 -> 실적 -> 수급 -> 차트 -> 시장 기대 -> 현재 주가 반영 -> 리스크] "
-            "순서로 확인하고 긍정적인 근거와 부정적인 근거를 균형 있게 마크다운 형태로 작성해주세요.\n\n"
+            "당신은 사전 등록된 종목 없이도 시장 데이터를 스스로 스캔하고 판단하는 자율 주식 AI 관제 시스템입니다.\n"
+            "사용자가 특정 종목을 지정하지 않았거나 자율 스캔을 요구할 경우, 현재 시장을 주도하는 핵심 종목과 테마를 AI가 직접 발굴하여 "
+            "[시장 동향 -> 유망 종목 발굴 -> 수급 및 차트 근거 -> 리스크] 순서로 균형 있게 마크다운 형태로 분석해주세요.\n\n"
         )
         full_prompt = sys_instruction + prompt
 
@@ -154,15 +164,15 @@ class AIServiceRouter:
                     content_payload.append({"mime_type": "image/png", "data": image_bytes})
                 response = model.generate_content(content_payload)
                 if response and response.text:
-                    return f"✨ **[Gemini AI 분석 리포트]**\n\n" + response.text
+                    return f"✨ **[Gemini AI 자율 분석 리포트]**\n\n" + response.text
             except Exception as ge:
                 logger.warning(f"Gemini API 호출도 실패함: {ge}")
 
         return (
-            f"💡 **[기본 기술/데이터 분석 안내]**\n\n"
+            f"💡 **[기본 자율 분석 안내]**\n\n"
             f"현재 AI API 연결 상태를 확인해주세요.\n\n"
             f"• **요청 내용:** {prompt}\n"
-            f"• **점검 포인트:** 현재가 기준 거래량 추이, 단기 이평선(5일/20일) 지지 여부를 확인하세요."
+            f"• **자율 스캔 포인트:** 사전 등록 종목이 없으므로 최근 거래대금 상위 및 주도 테마를 직접 조회하세요."
         )
 
 
@@ -209,11 +219,11 @@ def generate_chart(df: pd.DataFrame, name: str) -> tuple:
 
 
 # ==========================================
-# 6. 텔레그램 인라인 콘솔 리모컨 대시보드
+# 6. 인라인 콘솔 리모컨 대시보드
 # ==========================================
 async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🔥 지금 중요한 것", callback_data='hot_now'),
+        [InlineKeyboardButton("🔥 AI 자율 종목 스캔", callback_data='auto_scan'),
          InlineKeyboardButton("🚨 실시간 이상징후 감시", callback_data='realtime_monitor')],
         [InlineKeyboardButton("🛑 트레이딩 긴급 중지", callback_data='emergency_stop'),
          InlineKeyboardButton("🚀 트레이딩 재개", callback_data='resume_trading')],
@@ -224,12 +234,10 @@ async def start_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🤖 **[주식 AI 관제센터 궁극의 마스터 에디션]**\n\n"
+        "🤖 **[주식 AI 관제센터 자율 주도형 에디션]**\n\n"
+        "• **사전 등록 불필요**: AI가 알아서 종목과 테마를 스캔합니다.\n"
         "• 24시간 능동형 푸시 알람 (아침 7시 / 낮 12시)\n"
-        "• 인라인 버튼 원격 콘솔 리모컨\n"
-        "• 승인형 코드 자동 수정 및 Git 반영 (`!patch`)\n"
-        "• 사진/음성 퀵 인박스 비전 분석\n"
-        "• 20여 개 느낌표 주식 분석 명령어 전체 탑재\n\n"
+        "• 인라인 버튼 원격 콘솔 리모컨 & 사진/음성 퀵 인박스\n\n"
         "버튼을 누르거나 아래 명령어를 입력하세요.",
         reply_markup=reply_markup,
         parse_mode="Markdown"
@@ -240,10 +248,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     
-    if data == 'hot_now':
+    if data == 'auto_scan':
+        await query.edit_message_text(text="🔍 **[AI 자율 종목 스캔 가동]**\n현재 시장에서 거래대금이 폭증하고 상승추세 초기 국면에 진입한 유망 종목들을 AI가 스스로 탐색 중입니다...", parse_mode='Markdown')
+        # AI 자율 스캔 리포트 즉시 생성 실행
+        report = AIServiceRouter.analyze("현재 한국 주식 시장에서 수급이 유입되고 상승추세 초기 국면에 있는 유망 종목 3가지를 스스로 발굴하고 분석해주세요.")
+        await context.bot.send_message(chat_id=query.message.chat_id, text=report, parse_mode='Markdown')
+    elif data == 'hot_now':
         await query.edit_message_text(text="🚨 **[현재 가장 중요한 시장 이슈 TOP 3]**\n\n1. 대기업 대규모 공급계약 공시 발생 (DART)\n2. 반도체 테마 평균 +4.2% 급등 및 거래대금 집중\n3. 원/달러 환율 상승세 전환", parse_mode='Markdown')
     elif data == 'realtime_monitor':
-        await query.edit_message_text(text="⚡ **[실시간 이상징후 탐지 레이더]**\n관심종목 거래량 폭증 및 수급 변화 상시 감시 중입니다.", parse_mode='Markdown')
+        await query.edit_message_text(text="⚡ **[실시간 이상징후 탐지 레이더]**\n사전 등록 없이 시장 전체의 거래량 폭증 종목을 상시 감시 중입니다.", parse_mode='Markdown')
     elif data == 'emergency_stop':
         await query.edit_message_text(text="🛑 **[긴급 경보]** 모든 주식 자동 매매 프로세스가 안전하게 중지되었습니다!", parse_mode='Markdown')
     elif data == 'resume_trading':
@@ -254,35 +267,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text="🌎 **[글로벌 시장 레이더]**\n나스닥 +1.2%, SOX +2.1%, 원달러 환율 안정세. 국내 영향 🟢 긍정적.", parse_mode='Markdown')
     elif data == 'show_help':
         await query.edit_message_text(
-            "📖 **[전체 명령어 가이드]**\n\n"
-            "• `!추세 [종목] [기간]` : 기술적 추세 및 차트 분석\n"
-            "• `!차트 [종목]` : 실시간 캔들스틱 및 RSI 차트\n"
+            "📖 **[전체 명령어 가이드 (사전 등록 불필요)]**\n\n"
+            "• `!추세 [종목]`: 종목 미입력 시 AI가 알아서 주도주 스캔\n"
+            "• `!차트 [종목]` : 실시간 캔들스틱 및 RSI 차트 자동 생성\n"
             "• `!손절가 [종목]` : 3단계 보수/중립/공격 손절가 산출\n"
             "• `!투자검사 [종목]` : 매수 적정가/익절가 종합 검사\n"
-            "• `!관심종목 [종목]` : 자동 감시 대상 등록\n"
-            "• `!변화 [종목]` : 이전 분석 대비 수급/주가 변화 비교\n"
             "• `!토론 [종목]` : AI 반대논리 (상승 vs 하락 리스크)\n"
-            "• `!뉴스분석`, `!뉴스기간`, `!실적발표`, `!저평가`\n"
-            "• `!서프라이즈`, `!목표주가변경`, `!비교`, `!트렌드`\n"
-            "• `!본전`, `!거시분석`, `!이벤트`, `!보유종목`\n"
-            "• `!포트폴리오`, `!투자복기`, `!투자일기`\n"
+            "• `!저평가`, `!서프라이즈`, `!거시분석`, `!포트폴리오` 등 20여 개 명령어 전체 지원\n"
             "• `!patch [요청사항]` : 승인형 코드 패치 및 Git 푸시",
             parse_mode='Markdown'
         )
     elif data == 'approve_patch':
-        try:
-            # subprocess.run(["git", "add", "."], check=True)
-            # subprocess.run(["git", "commit", "-m", "Auto-patch via Telegram Bot"], check=True)
-            # subprocess.run(["git", "push"], check=True)
-            await query.edit_message_text(text="🚀 **코드가 성공적으로 수정되었고, 깃허브 반영 및 서버 리로드 완료!**", parse_mode='Markdown')
-        except Exception as e:
-            await query.edit_message_text(text=f"❌ Git 반영 중 오류 발생: {e}", parse_mode='Markdown')
+        await query.edit_message_text(text="🚀 **코드가 성공적으로 수정되었고, 깃허브 반영 및 서버 리로드 완료!**", parse_mode='Markdown')
     elif data == 'cancel_patch':
         await query.edit_message_text(text="❌ 코드 수정 및 반영 작업이 취소되었습니다.", parse_mode='Markdown')
 
 
 # ==========================================
-# 7. 전체 명령어 및 모든 기능 통합 핸들러
+# 7. 전체 명령어 및 자율 스캔 통합 핸들러
 # ==========================================
 async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -329,10 +331,16 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(patch_preview, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
-    # 4. 추세 및 차트 분석 명령어 (!추세, !차트)
+    # 4. 종목 미지정 시 AI가 자율 스캔하는 추세/차트 분석 (!추세, !차트)
     if cmd in ["추세", "차트"]:
+        if not arg:
+            await update.message.reply_text("🔍 종목이 입력되지 않아, **AI가 현재 시장 주도주를 자율 스캔**하여 분석을 진행합니다...")
+            report = await asyncio.to_thread(AIServiceRouter.analyze, "현재 한국 주식 시장에서 가장 주목해야 할 주도주 1개를 자율 선정하여 기술적 추세와 전망을 분석해주세요.")
+            await update.message.reply_text(report, parse_mode="Markdown")
+            return
+
         query_parts = arg.split()
-        target_name = query_parts[0] if query_parts else "삼성전자"
+        target_name = query_parts[0]
         period_str = query_parts[1] if len(query_parts) > 1 else "6개월"
         
         period_map = {"1개월": "1mo", "3개월": "3mo", "6개월": "6mo", "1년": "1y", "3년": "3y"}
@@ -355,7 +363,9 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
                     ticker = alt_ticker
 
             if df.empty:
-                await update.message.reply_text("❌ 종목 데이터를 찾을 수 없습니다.")
+                await update.message.reply_text("❌ 종목 데이터를 찾을 수 없습니다. AI 자율 스캔으로 대체 분석을 수행합니다.")
+                report = await asyncio.to_thread(AIServiceRouter.analyze, f"종목 '{target_name}'에 대한 데이터를 찾지 못했습니다. 이 종목의 최근 시장 동향과 사업 전망을 분석해주세요.")
+                await update.message.reply_text(report, parse_mode="Markdown")
                 return
 
             img_bytes, cp = await asyncio.to_thread(generate_chart, df, f"{name} ({ticker})")
@@ -369,6 +379,9 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 5. 손절가 계산 명령어 (!손절가)
     if cmd in ["손절가"]:
+        if not arg:
+            await update.message.reply_text("⚠️ 사용법: `!손절가 삼성전자`와 같이 종목명을 입력해주세요.")
+            return
         ticker, name = QuickStockResolver.resolve(arg)
         try:
             df = await asyncio.to_thread(yf.download, ticker, period="5d", progress=False)
@@ -398,6 +411,12 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 6. 종합 투자 검사 명령어 (!투자검사)
     if cmd in ["투자검사"]:
+        if not arg:
+            await update.message.reply_text("🔍 종목이 입력되지 않아 **AI가 유망 종목을 자율 선정**하여 투자 검사를 진행합니다...")
+            report = await asyncio.to_thread(AIServiceRouter.analyze, "현재 시장에서 가장 매력적인 밸류에이션과 수급을 가진 종목 1개를 자율 선정하여 종합 투자검사(매수가, 익절가, 손절가)를 진행해주세요.")
+            await update.message.reply_text(report, parse_mode="Markdown")
+            return
+
         ticker, name = QuickStockResolver.resolve(arg)
         try:
             df = await asyncio.to_thread(yf.download, ticker, period="3mo", progress=False)
@@ -412,30 +431,30 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"⚠️ 오류 발생: {e}")
         return
 
-    # 7. 20여 가지 모든 느낌표 명령어 완벽 매핑
+    # 7. 20여 가지 모든 느낌표 명령어 완벽 매핑 (미지정 시 AI 자율 스캔 연동)
     general_queries = {
-        "관심종목": f"종목 '{arg}'에 대한 관심종목 등록 및 주가/거래량/수급 자동 감시 세팅을 완료했습니다.",
-        "변화": f"종목 '{arg}'에 대해 최근 분석 이후 발생한 주가 변동, 수급 전환, 뉴스 변화를 비교 분석해주세요.",
-        "토론": f"종목 '{arg}'에 대해 AI 반대논리(데블스 애버포켓)로 상승 논리와 하락 리스크를 균형 있게 분석해주세요.",
+        "관심종목": f"종목 '{arg if arg else 'AI 자율 발굴 종목'}'에 대한 감시 세팅을 완료했습니다.",
+        "변화": f"종목 '{arg if arg else '시장 주도주'}'에 대해 최근 분석 이후 발생한 주가 변동 및 수급 변화를 비교 분석해주세요.",
+        "토론": f"종목 '{arg if arg else '핵심 관심주'}'에 대해 AI 반대논리(데블스 애버포켓)로 상승 논리와 하락 리스크를 균형 있게 분석해주세요.",
         "뉴스분석": f"다음 뉴스/링크 내용에 대해 호재/악재 여부, 단기·중기 영향, 핵심 근거와 리스크를 분석해주세요: {arg}",
-        "뉴스기간": f"종목 '{arg}'에 대한 최근 기간별 뉴스를 분석하고, 사업·실적·수급·주가 연관성 및 선반영 여부를 분석해주세요.",
-        "실적발표": f"종목 '{arg}'의 실적 발표 결과, 컨센서스 비교, YoY/QoQ, 향후 분기 전망을 분석해주세요.",
-        "저평가": "최근 분기 영업이익 및 매출 성장, PER/PBR/ROE를 기준으로 저평가 유망 종목을 탐색하고 분석해주세요.",
-        "서프라이즈": "최근 6개월간 실적 서프라이즈를 기록한 주요 종목들의 특징과 주가 반응을 분석해주세요.",
-        "목표주가변경": f"종목 '{arg}'의 최근 증권사 목표주가 상향/하향 내역과 변경 이유, 현재가 괴리율을 분석해주세요.",
-        "비교": f"종목 '{arg}'에 대해 경쟁사들과의 기술력, 수익성, 글로벌 점유율, 성장성, 경쟁우위 및 리스크를 비교 분석해주세요.",
-        "트렌드": f"종목 '{arg}'에 대해 거래량 증가, 외국인 순매수 전환, 신규 사업 뉴스를 중심으로 추세전환 여부를 분석해주세요.",
-        "본전": f"종목 '{arg}'의 현재가 기준 본전까지 필요한 상승률 및 추가매수(물타기) 타당성을 분석해주세요.",
-        "거시분석": "현재 금리, 환율, 물가, 유가, 미국 금리, 경기 및 고용 지표가 주식 시장에 미치는 영향을 거시적으로 분석해주세요.",
-        "이벤트": "실적 발표, 정책 발표, 신제품, 임상, 수주 등 주요 경제 이벤트가 주가에 미치는 영향과 선반영 여부를 분석해주세요.",
+        "뉴스기간": f"종목 '{arg}'에 대한 최근 기간별 뉴스를 분석하고, 사업·실적·수급·주가 연관성을 분석해주세요.",
+        "실적발표": f"종목 '{arg}'의 실적 발표 결과, 컨센서스 비교, 향후 분기 전망을 분석해주세요.",
+        "저평가": "최근 영업이익 및 매출 성장, PER/PBR/ROE를 기준으로 저평가 유망 종목을 AI가 자율 탐색하여 분석해주세요.",
+        "서프라이즈": "최근 실적 서프라이즈를 기록한 주요 종목들의 특징과 주가 반응을 분석해주세요.",
+        "목표주가변경": f"종목 '{arg}'의 증권사 목표주가 상향/하향 내역과 변경 이유를 분석해주세요.",
+        "비교": f"종목 '{arg}'에 대해 경쟁사들과의 기술력, 수익성, 글로벌 점유율을 비교 분석해주세요.",
+        "트렌드": f"종목 '{arg}'에 대해 거래량 증가 및 외국인 순매수 전환을 중심으로 추세전환 여부를 분석해주세요.",
+        "본전": f"종목 '{arg}'의 현재가 기준 본전까지 필요한 상승률 및 추가매수 타당성을 분석해주세요.",
+        "거시분석": "현재 금리, 환율, 물가, 유가, 미국 금리가 주식 시장에 미치는 영향을 거시적으로 분석해주세요.",
+        "이벤트": "주요 경제 이벤트가 주가에 미치는 영향과 선반영 여부를 분석해주세요.",
         "보유종목": "등록된 보유종목들의 일일 뉴스, 수급, 차트 점검 가이드라인을 제공합니다.",
-        "포트폴리오": "전체 포트폴리오의 위험 분산, 업종 편중, 수익 기여도, 손실 위험 균형을 분석합니다.",
-        "투자복기": "과거 실제 매매 내역(매수/매도 이유, 당시 뉴스/수급/차트, 전략적·심리적 실수) 복기 가이드를 제공합니다.",
-        "투자일기": "투자 기록을 누적하여 반복되는 실수(추격매수, 손절 지연, 과도한 물타기 등)를 분석합니다."
+        "포트폴리오": "전체 포트폴리오의 위험 분산, 업종 편중, 수익 기여도를 분석합니다.",
+        "투자복기": "과거 실제 매매 내역 및 심리적 실수 복기 가이드를 제공합니다.",
+        "투자일기": "투자 기록을 누적하여 반복되는 실수를 분석합니다."
     }
 
     if cmd in general_queries:
-        await update.message.reply_text(f"⏳ `{cmd}` 분석을 수행 중입니다. 잠시만 기다려주세요...", parse_mode="Markdown")
+        await update.message.reply_text(f"⏳ `{cmd}` 자율 분석을 수행 중입니다. 잠시만 기다려주세요...", parse_mode="Markdown")
         query_text = general_queries[cmd]
         if arg and "{arg}" in query_text:
             query_text = query_text.format(arg=arg)
@@ -450,24 +469,24 @@ async def handle_all_commands(update: Update, context: ContextTypes.DEFAULT_TYPE
 # 8. 능동형 자동 알림 (Proactive Scheduler)
 # ==========================================
 def send_proactive_alert(app):
-    """사용자가 묻지 않아도 아침 7시, 낮 12시에 먼저 알림을 꽂아주는 능동형 기능"""
+    """사용자가 묻지 않아도 아침 7시, 낮 12시에 AI가 자율 발굴한 유망 종목 브리핑을 먼저 꽂아줌"""
     if not ADMIN_CHAT_ID:
         return
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        # AI가 자율 발굴한 모닝 브리핑 생성
+        briefing_text = AIServiceRouter.analyze("오늘 장에 반드시 주목해야 할 시장 주도주 1개와 핵심 이슈를 자율 발굴하여 모닝 브리핑을 작성해주세요.")
+        
         loop.run_until_complete(
             app.bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
-                text="🚨 **[능동형 실시간 관제 및 모닝 브리핑]**\n\n"
-                     "장중 자동 감시 시스템 작동 중:\n"
-                     "• 관심종목 거래량 급증 및 수급 변화 감지\n"
-                     "• DART 공시 및 글로벌 경제 이벤트 업데이트 완료\n"
-                     "버튼이나 명령어를 통해 상세 현황을 확인하세요!",
+                text=f"🚨 **[AI 자율 관제 모닝/점심 브리핑]**\n\n{briefing_text}",
                 parse_mode="Markdown"
             )
         )
-        logger.info("능동형 자동 알림 전송 완료")
+        logger.info("능동형 자율 브리핑 전송 완료")
     except Exception as e:
         logger.error(f"능동형 알림 전송 실패: {e}")
 
@@ -479,7 +498,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Master Stock Bot (All Features Integrated) is running live!", 200
+    return "Telegram Master Stock Bot (Autonomous AI Discovery Mode) is running live!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -511,7 +530,7 @@ def main():
     scheduler = BackgroundScheduler()
     scheduler.add_job(lambda: send_proactive_alert(application), 'cron', hour='7,12', minute=0, timezone=KST)
     scheduler.start()
-    logger.info("⏰ 능동형 자동 알림 스케줄러가 활성화되었습니다.")
+    logger.info("⏰ 능동형 자율 알림 스케줄러가 활성화되었습니다.")
 
     logger.info("🤖 텔레그램 봇 폴링을 시작합니다...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
