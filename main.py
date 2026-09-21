@@ -79,7 +79,7 @@ class AIServiceRouter:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=GEMINI_API_KEY)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-3.8-flash')
                 content_payload = [full_prompt]
                 if image_bytes:
                     content_payload.append({"mime_type": "image/png", "data": image_bytes})
