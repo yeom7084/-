@@ -51,7 +51,7 @@ AUTO_TRADING_ACTIVE = True
 
 
 # ==========================================
-# 3. AI 서비스 라우터
+# 3. AI 서비스 라우터 (요청하신 모델명 반영)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -59,21 +59,29 @@ class AIServiceRouter:
         sys_instruction = "당신은 주식 시장을 24시간 감시하며 자율적으로 매매 기회를 포착하는 AI 관제 시스템입니다. 핵심만 냉철하게 분석해주세요.\n\n"
         full_prompt = sys_instruction + prompt
         
-        # 1순위: Groq 시도
+        error_logs = []
+
+        # 1순위: Groq 시도 (groq/4.7 모델 지정)
         try:
             if GROQ_API_KEY:
                 headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GROQ_API_KEY}"}
-                payload = {"model": "grok-4.7", "messages": [{"role": "user", "content": full_prompt}], "temperature": 0.2}
+                payload = {
+                    "model": "groq/4.7", 
+                    "messages": [{"role": "user", "content": full_prompt}], 
+                    "temperature": 0.2
+                }
                 req = urllib.request.Request(GROQ_BASE_URL, data=json.dumps(payload).encode('utf-8'), headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=30) as response:
                     res_data = json.loads(response.read().decode('utf-8'))
                     content = res_data['choices'][0]['message']['content']
                     if content:
-                        return f"⚡ **[Groq AI 자율 분석]**\n\n" + content
+                        return f"⚡ **[Groq (groq/4.7) 자율 분석]**\n\n" + content
         except Exception as e:
-            logger.warning(f"Groq 호출 실패, Gemini로 전환합니다: {e}")
+            err_msg = f"Groq 에러: {str(e)}"
+            logger.warning(err_msg)
+            error_logs.append(err_msg)
 
-        # 2순위: Gemini 시도
+        # 2순위: Gemini 시도 (gemini-3.8-flash 모델 지정)
         try:
             if GEMINI_API_KEY:
                 import google.generativeai as genai
@@ -84,11 +92,15 @@ class AIServiceRouter:
                     content_payload.append({"mime_type": "image/png", "data": image_bytes})
                 response = model.generate_content(content_payload)
                 if response and response.text:
-                    return f"✨ **[Gemini AI 자율 분석]**\n\n" + response.text
+                    return f"✨ **[Gemini (gemini-3.8-flash) 자율 분석]**\n\n" + response.text
         except Exception as ge:
-            logger.error(f"Gemini 호출 에러: {ge}")
+            err_msg = f"Gemini 에러: {str(ge)}"
+            logger.error(err_msg)
+            error_logs.append(err_msg)
 
-        return "⚠️ **[AI 분석 안내]**\nAPI 키 호출에 실패했습니다. 키 유효성을 다시 확인해주세요."
+        # 최종 실패 시 상세 에러 반환
+        logger.error(f"모든 AI 호출 실패. 상세 내역: {error_logs}")
+        return f"⚠️ **[AI 분석 안내]**\nAPI 키 또는 모델 호출 실패\n상세원인: {', '.join(error_logs)}"
 
 
 # ==========================================
