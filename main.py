@@ -39,12 +39,12 @@ else:
 plt.rcParams['axes.unicode_minus'] = False
 
 # ==========================================
-# 2. API 토큰 및 키 설정 (입력 완료)
+# 2. API 토큰 및 키 설정 (Render 환경 변수 연동)
 # ==========================================
-TELEGRAM_BOT_TOKEN = "8778354564:AAHxXkMEdoAeEgj3_q3IHJkfJNqQwVsa7jY"
-GROQ_API_KEY = "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"
-GEMINI_API_KEY = "AQ.Ab8RN6IdEeCVzcXEKuZLG1EgRLE8pi6y9N3nbKa7fiyJRn0QFA"
-ADMIN_CHAT_ID = "8986219602"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8778354564:AAHxXkMEdoAeEgj3_q3IHJkfJNqQwVsa7jY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IdEeCVzcXEKuZLG1EgRLE8pi6y9N3nbKa7fiyJRn0QFA")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "8986219602")
 GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 AUTO_TRADING_ACTIVE = True
