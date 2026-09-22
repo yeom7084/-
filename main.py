@@ -1,56 +1,26 @@
 import os
-import io
 import json
 import logging
-import platform
-import threading
-import asyncio
 import urllib.request
-from flask import Flask
-import pytz
-import pandas as pd
-import numpy as np
-import yfinance as yf
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters
-)
-from apscheduler.schedulers.background import BackgroundScheduler
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# 1. 로깅 및 환경 설정
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# 로깅 설정
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-KST = pytz.timezone('Asia/Seoul')
-
-if platform.system() == 'Windows':
-    plt.rc('font', family='Malgun Gothic')
-elif platform.system() == 'Darwin':
-    plt.rc('font', family='AppleGothic')
-else:
-    plt.rc('font', family='NanumGothic')
-plt.rcParams['axes.unicode_minus'] = False
 
 # ==========================================
-# 2. API 토큰 및 키 설정 (Render 환경 변수 연동)
+# 1. 환경 변수 및 설정
 # ==========================================
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8778354564:AAHxXkMEdoAeEgj3_q3IHJkfJNqQwVsa7jY")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IdEeCVzcXEKuZLG1EgRLE8pi6y9N3nbKa7fiyJRn0QFA")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "8986219602")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
+
 GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-AUTO_TRADING_ACTIVE = True
-
 # ==========================================
-# 3. AI 서비스 라우터 (정확한 표준 모델 지정 및 에러 방어)
+# 2. AI 서비스 라우터 (안정적인 최신 모델 연동)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -60,7 +30,22 @@ class AIServiceRouter:
         
         error_logs = []
 
-        # 1순위: Groq 시도 (공식 지원 모델: llama-3.3-70b-versatile)
+        # 1순위: Gemini 모델 시도
+        try:
+            if GEMINI_API_KEY:
+                import google.generativeai as genai
+                genai.configure(api_key=GEMINI_API_KEY)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                content_payload = [full_prompt]
+                if image_bytes:
+                    content_payload.append({"mime_type": "image/png", "data": image_bytes})
+                response = model.generate_content(content_payload)
+                if response and response.text:
+                    return f"✨ **[Gemini AI 자율 분석]**\n\n" + response.text
+        except Exception as ge:
+            error_logs.append(f"Gemini: {str(ge)}")
+
+        # 2순위: Groq 모델 시도 (llama-3.3-70b-versatile)
         try:
             if GROQ_API_KEY:
                 headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GROQ_API_KEY}"}
@@ -78,24 +63,43 @@ class AIServiceRouter:
         except Exception as e:
             error_logs.append(f"Groq: {str(e)}")
 
-        # 2순위: Gemini 시도 (공식 지원 모델: gemini-3.8-flash)
-        try:
-            if GEMINI_API_KEY:
-                import google.generativeai as genai
-                genai.configure(api_key=GEMINI_API_KEY)
-                model = genai.GenerativeModel('gemini-3.8-flash')
-                content_payload = [full_prompt]
-                if image_bytes:
-                    content_payload.append({"mime_type": "image/png", "data": image_bytes})
-                response = model.generate_content(content_payload)
-                if response and response.text:
-                    return f"✨ **[Gemini AI 자율 분석]**\n\n" + response.text
-        except Exception as ge:
-            error_logs.append(f"Gemini: {str(ge)}")
-
-        # 둘 다 실패 시 원인 반환
+        # 최종 실패 시 에러 반환
+        logger.error(f"모든 AI 호출 실패. 상세 내역: {error_logs}")
         return f"⚠️ **[AI 분석 안내]**\nAPI 키 호출에 실패했습니다.\n상세 사유: {' | '.join(error_logs)}"
 
+# ==========================================
+# 3. 텔레그램 명령어 핸들러
+# ==========================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 AI 시장 레이더 및 종목 스캔 실행 중 잠시만 기다려주세요...")
+    
+    # AI 분석 실행 테스트
+    result_text = AIServiceRouter.analyze("현재 주식 시장 상황에 대한 간략한 브리핑을 제공해줘.")
+    await update.message.reply_text(result_text, parse_mode="Markdown")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "🤖 **AI 주식 관제 시스템 대시보드**\n\n"
+        "• `/start` - 시장 레이더 스캔 및 AI 분석 실행\n"
+        "• `/help` - 도움말 및 명령어 안내\n"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+def main():
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("Telegram Bot Token이 설정되지 않았습니다.")
+        return
+
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+
+    logger.info("봇이 성공적으로 실행되었습니다.")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
 # ==========================================
 # 4. 자율 스캔 엔진
 # ==========================================
