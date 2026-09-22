@@ -63,7 +63,7 @@ class AIServiceRouter:
         try:
             if GROQ_API_KEY:
                 headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GROQ_API_KEY}"}
-                payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": full_prompt}], "temperature": 0.2}
+                payload = {"model": "grok-4.7", "messages": [{"role": "user", "content": full_prompt}], "temperature": 0.2}
                 req = urllib.request.Request(GROQ_BASE_URL, data=json.dumps(payload).encode('utf-8'), headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=30) as response:
                     res_data = json.loads(response.read().decode('utf-8'))
@@ -78,7 +78,7 @@ class AIServiceRouter:
             if GEMINI_API_KEY:
                 import google.generativeai as genai
                 genai.configure(api_key=GEMINI_API_KEY)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-3.8-flash')
                 content_payload = [full_prompt]
                 if image_bytes:
                     content_payload.append({"mime_type": "image/png", "data": image_bytes})
