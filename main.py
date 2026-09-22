@@ -49,9 +49,8 @@ GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 AUTO_TRADING_ACTIVE = True
 
-
 # ==========================================
-# 3. AI 서비스 라우터 (요청하신 모델명 반영)
+# 3. AI 서비스 라우터 (정확한 표준 모델 지정 및 에러 방어)
 # ==========================================
 class AIServiceRouter:
     @staticmethod
@@ -61,12 +60,12 @@ class AIServiceRouter:
         
         error_logs = []
 
-        # 1순위: Groq 시도 (groq/4.7 모델 지정)
+        # 1순위: Groq 시도 (공식 지원 모델: llama-3.3-70b-versatile)
         try:
             if GROQ_API_KEY:
                 headers = {"Content-Type": "application/json", "Authorization": f"Bearer {GROQ_API_KEY}"}
                 payload = {
-                    "model": "groq/4.7", 
+                    "model": "llama-3.3-70b-versatile", 
                     "messages": [{"role": "user", "content": full_prompt}], 
                     "temperature": 0.2
                 }
@@ -75,13 +74,11 @@ class AIServiceRouter:
                     res_data = json.loads(response.read().decode('utf-8'))
                     content = res_data['choices'][0]['message']['content']
                     if content:
-                        return f"⚡ **[Groq (groq/4.7) 자율 분석]**\n\n" + content
+                        return f"⚡ **[Groq AI 자율 분석]**\n\n" + content
         except Exception as e:
-            err_msg = f"Groq 에러: {str(e)}"
-            logger.warning(err_msg)
-            error_logs.append(err_msg)
+            error_logs.append(f"Groq: {str(e)}")
 
-        # 2순위: Gemini 시도 (gemini-3.8-flash 모델 지정)
+        # 2순위: Gemini 시도 (공식 지원 모델: gemini-3.8-flash)
         try:
             if GEMINI_API_KEY:
                 import google.generativeai as genai
@@ -92,16 +89,12 @@ class AIServiceRouter:
                     content_payload.append({"mime_type": "image/png", "data": image_bytes})
                 response = model.generate_content(content_payload)
                 if response and response.text:
-                    return f"✨ **[Gemini (gemini-3.8-flash) 자율 분석]**\n\n" + response.text
+                    return f"✨ **[Gemini AI 자율 분석]**\n\n" + response.text
         except Exception as ge:
-            err_msg = f"Gemini 에러: {str(ge)}"
-            logger.error(err_msg)
-            error_logs.append(err_msg)
+            error_logs.append(f"Gemini: {str(ge)}")
 
-        # 최종 실패 시 상세 에러 반환
-        logger.error(f"모든 AI 호출 실패. 상세 내역: {error_logs}")
-        return f"⚠️ **[AI 분석 안내]**\nAPI 키 또는 모델 호출 실패\n상세원인: {', '.join(error_logs)}"
-
+        # 둘 다 실패 시 원인 반환
+        return f"⚠️ **[AI 분석 안내]**\nAPI 키 호출에 실패했습니다.\n상세 사유: {' | '.join(error_logs)}"
 
 # ==========================================
 # 4. 자율 스캔 엔진
